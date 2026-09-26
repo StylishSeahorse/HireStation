@@ -171,11 +171,39 @@ downloaded through the configured Docuseal URL and stored locally), `form.declin
 They're verified by Docuseal's **HMAC signature** (`X-Docuseal-Signature`) when the webhook's
 signing secret is saved in Settings. The shared `X-Webhook-Secret` header also works.
 
+The hourly reminder scan notifies staff about contracts still unsigned within N days of
+the event, and asks Docuseal to re-send the signing email.
+
 Tested end to end against a real Docuseal 3.2.6 (free edition) running from
 `docker-compose.docuseal.yml`: send → client views → signs → HMAC-verified webhooks →
 booking "Contract signed" → signed PDF stored.
-- The hourly reminder scan notifies staff about contracts still unsigned within
-  N days of the event and asks Docuseal to re-send the signing email.
+
+#### One template, many bookings
+
+You do **not** create a Docuseal template per booking. Build it once and reuse it:
+
+1. **Once:** upload your hire agreement to Docuseal, add fields named after the merge
+   fields plus a signature box, and map it to your contract template in HireStation.
+2. **Every booking:** press *Generate & send*. HireStation sends that booking's values;
+   Docuseal fills them into a fresh copy of the template (a *submission*) and emails the
+   client. The template itself never changes.
+
+Create another template only for a genuinely different *kind* of agreement, e.g. one each
+for dry hire, full production with staff, and DJ booth bookings.
+
+**Line items:** the equipment goes into one multi-line field, `equipment_list`, one line per
+item (e.g. `2 × Line array speaker (2 days) — $720.00`). The field is a fixed-size box on
+your template, so:
+
+- size it for your longest typical booking
+- very long lists (say 30+ items) may overflow or shrink the text. If large productions are
+  common, keep a second template with a bigger equipment area, or one with the list on its
+  own page
+
+If that becomes a real limitation, there are two ways out:
+- **Docuseal Pro:** HireStation sends its own contract, whose equipment table grows with the booking.
+- **Code change:** HireStation could generate a separate equipment-schedule PDF per booking,
+  which the signed agreement refers to (not built yet).
 
 ## Feature map
 
@@ -254,9 +282,72 @@ The end-to-end suite also runs when `TEST_DATABASE_URL` points to a
 `public` schema, then drives setup → booking → Docuseal → return → Invoice Ninja → paid
 against mock integration servers.
 
+## Testing locally
+
+**1. Automated tests** (Node 22 and a Postgres you can throw away)
+
+```sh
+npm install
+TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/hirestation_test npm test
+```
+
+⚠️ `TEST_DATABASE_URL` must point at a **test-only** database: the end-to-end suite drops
+and recreates its `public` schema. Without it, only the unit tests run.
+
+**2. Full stack with the bundled Docuseal**
+
+```sh
+cp .env.example .env
+```
+
+In `.env`:
+- set `SESSION_SECRET` (32+ chars), `POSTGRES_PASSWORD` and `PUBLIC_URL`
+- uncomment the Docuseal block: `COMPOSE_FILE`, `DOCUSEAL_HOST`, `DOCUSEAL_DB_PASSWORD`,
+  and the SMTP settings if you want signing emails
+- for plain-http testing on your own machine, also set `DOCUSEAL_FORCE_SSL=false`
+
+```sh
+docker compose up -d --build
+docker compose ps        # all services running; app, db and docuseal healthy
+```
+
+**3. One-time setup** (details under *Deploy → With a bundled Docuseal*)
+
+- **Docuseal:** open `http://localhost:3001`, create the admin account, copy the API token
+  from Settings → API.
+- **HireStation:** open `http://localhost:3000` and complete the wizard.
+  - Docuseal URL `http://docuseal:3000` and that token.
+  - Your existing Invoice Ninja URL and token, then pick the company.
+- **Webhooks:**
+  - Docuseal → Settings → Webhooks: add the internal URL HireStation shows, then paste
+    Docuseal's signing secret (`whsec_…`) back into HireStation.
+  - HireStation → Settings → Invoice Ninja → *Register webhooks*.
+
+**4. Flows worth trying by hand**
+
+- **Contract:**
+  - On Docuseal's free edition, first build and map a Docuseal template (see
+    *One template, many bookings*).
+  - Send the contract, open the signing link, sign.
+  - The booking should move to "Contract signed" and the signed PDF should appear in HireStation.
+- **Invoice** (Invoice Ninja is only tested against a mock so far):
+  - Complete a booking's departure checklist, then its return checklist.
+  - A draft invoice should appear in Invoice Ninja, built from what actually came back.
+  - Record a payment in Invoice Ninja; the booking should move to "Paid".
+- **Security:**
+  - 5 wrong passwords lock the account for 15 minutes.
+  - Settings → Audit log and Settings → Webhook log show activity.
+
+If something breaks, `docker compose logs app worker` (and `docuseal` for signing issues)
+is the first place to look.
+
 ## Not yet built / notes
 
 - Public-holiday surcharge pricing: the region is captured in settings, but no
   surcharge rules exist yet.
+- **Invoice Ninja is not yet tested against a real instance**, only against a mock that follows
+  its API docs. The webhook event IDs are the most likely thing to need adjusting.
+- On Docuseal's free edition, the equipment list is a fixed-size text field (see
+  *One template, many bookings*). A per-booking equipment-schedule PDF isn't built yet.
 - Invoice Ninja tokens are company-scoped. The company picker records which
   company you intend, so use a token issued for that company.
