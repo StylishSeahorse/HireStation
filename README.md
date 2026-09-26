@@ -143,7 +143,26 @@ features stay disabled until you connect them in Settings.
 - **Status sync:** Settings → Invoice Ninja → *Register webhooks* subscribes
   invoice create/update and payment create events to a secret URL. The worker
   re-fetches the invoice from the API (it does not trust the payload), updates
-  the local mirror, and marks the booking **Paid** once every invoice is paid.
+  the local mirror (Sent / Partial with amount paid / Paid), and marks the booking
+  **Paid** once every invoice is paid.
+- ⚠️ **Webhook URL must be public:** Invoice Ninja refuses to register webhook URLs whose
+  hostname resolves to a private or reserved IP (SSRF protection). `PUBLIC_URL` must be
+  HireStation's public address (e.g. `https://hire.example.com`) and must resolve to a public IP
+  *from the Invoice Ninja server*. A LAN address, `localhost` or split-horizon DNS pointing at a
+  private IP will be refused, and HireStation will explain why. The check only happens at
+  registration.
+
+Tested end to end against a real Invoice Ninja 5.13.43:
+- the client was created with its ABN in `vat_number` and a contact
+- the invoice was built from the return checklist: day-of additions, a discount split
+  between taxable and GST-free lines, loss/damage and a late fee. GST matched to the cent,
+  and the bond was left off
+- re-generating updated the draft in place
+- mark sent → *Sent* via webhook
+- partial payment → *Partial* with the amount paid
+- adjusting after issue created a credit note
+- paying the balance with the credit applied → *Paid*
+- the webhook event IDs (2 invoice created, 4 payment created, 8 invoice updated) match Invoice Ninja's source
 
 ### Docuseal
 
@@ -321,7 +340,9 @@ docker compose ps        # all services running; app, db and docuseal healthy
 - **Webhooks:**
   - Docuseal → Settings → Webhooks: add the internal URL HireStation shows, then paste
     Docuseal's signing secret (`whsec_…`) back into HireStation.
-  - HireStation → Settings → Invoice Ninja → *Register webhooks*.
+  - HireStation → Settings → Invoice Ninja → *Register webhooks*. `PUBLIC_URL` must be a public
+    address for this (see *Integrations → Invoice Ninja*). When testing purely on a LAN, this
+    step will be refused. Invoices still generate; only automatic status updates need the webhook.
 
 **4. Flows worth trying by hand**
 
@@ -330,7 +351,7 @@ docker compose ps        # all services running; app, db and docuseal healthy
     *One template, many bookings*).
   - Send the contract, open the signing link, sign.
   - The booking should move to "Contract signed" and the signed PDF should appear in HireStation.
-- **Invoice** (Invoice Ninja is only tested against a mock so far):
+- **Invoice** (tested against a real Invoice Ninja 5.13; still worth checking with your own instance and settings):
   - Complete a booking's departure checklist, then its return checklist.
   - A draft invoice should appear in Invoice Ninja, built from what actually came back.
   - Record a payment in Invoice Ninja; the booking should move to "Paid".
@@ -345,8 +366,6 @@ is the first place to look.
 
 - Public-holiday surcharge pricing: the region is captured in settings, but no
   surcharge rules exist yet.
-- **Invoice Ninja is not yet tested against a real instance**, only against a mock that follows
-  its API docs. The webhook event IDs are the most likely thing to need adjusting.
 - On Docuseal's free edition, the equipment list is a fixed-size text field (see
   *One template, many bookings*). A per-booking equipment-schedule PDF isn't built yet.
 - Invoice Ninja tokens are company-scoped. The company picker records which

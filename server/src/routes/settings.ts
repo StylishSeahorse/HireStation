@@ -10,6 +10,7 @@ import { env } from '../lib/env.js';
 import { adminSchema, newWebhookKey } from './setup.js';
 import { publicUser } from './auth.js';
 import { WEBHOOK_SECRET_HEADER } from './webhooks.js';
+import { IntegrationError } from '../services/http.js';
 import type { BusinessProfile } from '@prisma/client';
 
 /** Existing installs predate the header secret; create it on first admin view. */
@@ -68,7 +69,17 @@ export async function settingsRoutes(app: FastifyInstance) {
     const url = webhookUrls(profile).invoiceNinja;
     if (!url || !env.publicUrl) throw new HttpError(400, 'PUBLIC_URL must be set for webhooks to be reachable');
     const secret = (await ensureWebhookSecret(profile)).webhookSecret!;
-    await client.registerWebhooks(url, { [WEBHOOK_SECRET_HEADER]: secret });
+    try {
+      await client.registerWebhooks(url, { [WEBHOOK_SECRET_HEADER]: secret });
+    } catch (e) {
+      // Invoice Ninja rejects webhook URLs whose host resolves to a private/reserved IP (SSRF guard).
+      const errors = (e as IntegrationError).body as { errors?: { target_url?: string[] } } | undefined;
+      if (e instanceof IntegrationError && e.status === 422 && errors?.errors?.target_url)
+        throw new HttpError(400, `Invoice Ninja refused the webhook URL ${url} (${errors.errors.target_url.join(', ')}). ` +
+          'It only accepts addresses whose hostname resolves to a public IP from the Invoice Ninja server, so set PUBLIC_URL to ' +
+          'HireStation\'s public https address (e.g. https://hire.example.com). LAN or split-DNS addresses are refused.');
+      throw e;
+    }
     return { ok: true, url };
   });
 

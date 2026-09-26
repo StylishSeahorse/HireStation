@@ -17,4 +17,7 @@ Checklist:
    Never set it to `true` when the app port is reachable directly, or clients could spoof
    their IP and get around the login throttle.
 4. Webhooks: Invoice Ninja and Docuseal must be able to reach `PUBLIC_URL/api/webhooks/...`.
-   If they run on the same host, that's normally already the case.
+   Invoice Ninja additionally **refuses to register** a webhook URL whose hostname resolves to a
+   private IP from its server, so `PUBLIC_URL` must resolve to your public IP there. That's the
+   normal case for a public subdomain. If you use split-horizon DNS, make sure the Invoice Ninja
+   container resolves it publicly. The bundled Docuseal can use the internal URL instead.

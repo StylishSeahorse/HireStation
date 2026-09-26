@@ -19,7 +19,8 @@ async function ensureClient(inClient: InvoiceNinja, clientId: string): Promise<s
 function toLineItems(t: Totals, gstRate: number, gstRegistered: boolean): InLineItem[] {
   return t.lines.map((l) => ({
     product_key: l.kind === 'HIRE' ? l.description : l.kind.replace('_', ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase()),
-    notes: l.kind === 'HIRE' ? `${l.description} — ${l.days} day${l.days === 1 ? '' : 's'} hire` : l.description,
+    // Quantity below is units × days, so spell both out to avoid "qty 4" reading as four units.
+    notes: l.kind === 'HIRE' ? `${l.quantity} × ${l.description} × ${l.days} day${l.days === 1 ? '' : 's'} hire` : l.description,
     // Days fold into quantity so Invoice Ninja's quantity × cost matches our line total.
     quantity: l.quantity * l.days,
     cost: fromCents(l.unitCost),

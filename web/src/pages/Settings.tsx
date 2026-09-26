@@ -101,7 +101,7 @@ function Webhooks({ which }: { which: 'invoiceNinja' | 'docuseal' }) {
       <p className="mb-2 text-sm text-slate-500">
         {which === 'docuseal'
           ? 'In Docuseal → Settings → Webhooks, add this URL and enable form.viewed, form.completed and form.declined. Then either paste Docuseal’s signing secret into the form above (recommended — signatures are verified), or add the header below as a custom secret.'
-          : 'Invoice Ninja calls this URL when invoices change or payments arrive, so booking statuses update without polling. “Register webhooks” sets the URL and secret header for you.'}
+          : 'Invoice Ninja calls this URL when invoices change or payments arrive, so booking statuses update without polling. “Register webhooks” sets the URL and secret header for you. Invoice Ninja only accepts a URL whose hostname resolves to a public IP, so PUBLIC_URL must be HireStation’s public address.'}
       </p>
       <div className="space-y-2 text-xs">
         <div><span className="text-slate-500">URL</span><code className="block break-all rounded bg-slate-100 p-2">{url ?? '—'}</code></div>
