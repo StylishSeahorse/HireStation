@@ -123,6 +123,7 @@ export function brandedDocument(body: string, p: BusinessProfile, opts: { title:
   table.items .num { text-align: right; }
   table.items tr.total td { font-weight: bold; border-top: 2px solid ${esc(accent)}; }
   .sig { margin-top: 28px; page-break-inside: avoid; }
+  signature-field, date-field { display: inline-block; border-bottom: 1px solid #9ca3af; vertical-align: bottom; }
   footer { margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 8px; font-size: 8.5pt; color: #6b7280; text-align: center; }
   </style></head><body>
   <header>${opts.logoDataUri ? `<img src="${opts.logoDataUri}" alt="">` : '<span></span>'}<div class="biz"><strong>${esc(p.tradingName || p.legalName)}</strong><br>ABN ${esc(formatAbn(p.abn))}<br>${esc(p.contactEmail)} · ${esc(p.contactPhone)}</div></header>

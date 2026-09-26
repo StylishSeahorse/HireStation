@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/db.js';
 import { HttpError, requireRole, startSession } from '../lib/auth.js';
 import { getProfile } from '../lib/profile.js';
-import { setupSchema } from '../lib/settingsSchema.js';
+import { sections, setupSchema, SectionName } from '../lib/settingsSchema.js';
 import { lookupAbn } from '../services/abr.js';
 import { InvoiceNinja } from '../services/invoiceNinja.js';
 import { Docuseal } from '../services/docuseal.js';
@@ -41,6 +41,15 @@ export async function setupRoutes(app: FastifyInstance) {
     });
     startSession(reply, user.id);
     return publicUser(user);
+  });
+
+  // Validate a single wizard step without saving.
+  app.post<{ Params: { section: string } }>('/api/setup/validate/:section', async (req) => {
+    await requireSetupActor(req);
+    const name = req.params.section as SectionName;
+    if (!(name in sections)) throw new HttpError(404, 'Unknown section');
+    sections[name].parse(req.body);
+    return { ok: true };
   });
 
   app.post('/api/setup/abn-lookup', async (req) => {

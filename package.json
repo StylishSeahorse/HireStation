@@ -1,5 +1,5 @@
 {
-  "name": "nv-hire",
+  "name": "hirestation",
   "private": true,
   "workspaces": ["server", "web"],
   "scripts": {

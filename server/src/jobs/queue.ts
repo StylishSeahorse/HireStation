@@ -2,7 +2,7 @@ import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { env } from '../lib/env.js';
 
-export const QUEUE_NAME = 'nv-hire';
+export const QUEUE_NAME = 'hirestation';
 
 export type JobName =
   | 'invoice.generate'

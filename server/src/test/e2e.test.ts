@@ -50,7 +50,7 @@ run('end-to-end', () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = TEST_DB;
     process.env.REDIS_URL = '';
-    process.env.STORAGE_PATH = '/tmp/nvhire-test-storage';
+    process.env.STORAGE_PATH = '/tmp/hirestation-test-storage';
     process.env.SESSION_SECRET ??= 'test-secret-test-secret-test-secret-123';
     // Fresh schema on the dedicated test database only.
     await prisma().$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE');

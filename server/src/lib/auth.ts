@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { prisma } from './db.js';
 import type { Role, User } from '@prisma/client';
 
-export const SESSION_COOKIE = 'nvh_session';
+export const SESSION_COOKIE = 'hs_session';
 const MAX_AGE_S = 60 * 60 * 24 * 14;
 
 declare module 'fastify' {

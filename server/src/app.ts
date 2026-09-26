@@ -5,6 +5,7 @@ import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ZodError } from 'zod';
+import './lib/settingsSchema.js'; // registers the global zod error map
 import { env } from './lib/env.js';
 import { prisma } from './lib/db.js';
 import { HttpError, guardMutation, loadUser } from './lib/auth.js';
@@ -80,7 +81,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Serve the built frontend (single container deployment) with SPA fallback.
   const webDist = resolve(env.webDist || '../web/dist');
   if (existsSync(webDist)) {
-    await app.register(fastifyStatic, { root: webDist, wildcard: false });
+    await app.register(fastifyStatic, { root: webDist });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) return reply.status(404).send({ error: 'Not found' });
       return reply.sendFile('index.html');

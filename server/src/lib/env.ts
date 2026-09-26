@@ -1,3 +1,8 @@
+import { existsSync } from 'node:fs';
+
+// Local development convenience; in Docker the values come from the compose environment.
+if (existsSync('.env')) process.loadEnvFile('.env');
+
 // Infrastructure-only configuration. Business data never lives here.
 function required(name: string): string {
   const v = process.env[name];

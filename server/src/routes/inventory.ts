@@ -89,7 +89,8 @@ export async function inventoryRoutes(app: FastifyInstance) {
     const body = returnSchema.parse(req.body);
     const b = await booking(req.params.id);
     if (!b.departure?.completed) throw new HttpError(409, 'Complete the departure checklist first');
-    if (b.returnInventory?.completed) throw new HttpError(409, 'Return already completed — use invoice adjustment for changes');
+    // Amending a completed return is an admin correction; the invoice is then regenerated/adjusted.
+    if (b.returnInventory?.completed && req.user!.role !== 'ADMIN') throw new HttpError(403, 'Only an admin can amend a completed return');
     const out = new Map(b.departure.lines.map((l) => [l.equipmentId, l]));
     const lines = body.lines.map((l) => {
       const d = out.get(l.equipmentId);

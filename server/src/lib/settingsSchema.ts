@@ -1,4 +1,7 @@
 import { z } from 'zod';
+
+// Friendlier message for missing fields across all API validation.
+z.config({ customError: (iss) => (iss.input === undefined || iss.input === null ? 'Required' : undefined) });
 import { isValidAbn, isValidAcn, isValidBsb, normaliseDigits, formatBsb } from './au.js';
 
 // Each wizard step / settings section validates with the same schema.
