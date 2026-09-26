@@ -1,11 +1,14 @@
 {
   "name": "hirestation",
   "private": true,
-  "workspaces": ["server", "web"],
+  "workspaces": [
+    "server",
+    "web"
+  ],
   "scripts": {
     "dev": "npm run dev -w server & npm run dev -w web",
     "build": "npm run build -w server && npm run build -w web",
-    "test": "npm test -w server",
+    "test": "npm test -w server && npm test -w web",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
   }
 }

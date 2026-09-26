@@ -62,6 +62,8 @@ model BusinessProfile {
   docusealUrl            String?
   docusealToken          String?
   docusealWebhookKey     String?
+  // Shared secret the integrations must send in the X-Webhook-Secret header.
+  webhookSecret          String?
   // Operational defaults
   contractReminderDays   Int               @default(3)
   createdAt              DateTime          @default(now())
@@ -75,15 +77,18 @@ enum Role {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         Role     @default(STAFF)
-  active       Boolean  @default(true)
-  staff        Staff?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  passwordHash   String
+  role           Role     @default(STAFF)
+  active         Boolean  @default(true)
+  // Bumped on password change, deactivation, role change or "sign out everywhere";
+  // sessions carrying an older version are rejected.
+  sessionVersion Int      @default(0)
+  staff          Staff?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------------------
@@ -411,11 +416,31 @@ model Notification {
 }
 
 model WebhookEvent {
-  id         String   @id @default(cuid())
-  source     String
-  event      String
-  payload    Json
-  processed  Boolean  @default(false)
-  error      String?
-  receivedAt DateTime @default(now())
+  id          String    @id @default(cuid())
+  source      String
+  event       String
+  payload     Json
+  processed   Boolean   @default(false)
+  error       String?
+  attempts    Int       @default(0)
+  processedAt DateTime?
+  receivedAt  DateTime  @default(now())
+
+  @@index([receivedAt])
+}
+
+model AuditLog {
+  id       String   @id @default(cuid())
+  at       DateTime @default(now())
+  userId   String?
+  userName String?
+  action   String // e.g. auth.login, auth.login_failed, POST /api/bookings/:id/status
+  entity   String? // route-derived entity type, e.g. bookings
+  entityId String?
+  status   Int?
+  ip       String?
+  detail   Json?
+
+  @@index([at])
+  @@index([entity, entityId])
 }

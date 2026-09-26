@@ -1,63 +1,76 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
+import { z } from 'zod';
 import { prisma } from '../lib/db.js';
-import { HttpError } from '../lib/auth.js';
+import { HttpError, requireRole } from '../lib/auth.js';
 import { enqueue } from '../jobs/queue.js';
-import { notify } from '../lib/bookings.js';
+import { audit } from '../lib/audit.js';
 
-function keyMatches(expected: string | null, given: string) {
-  if (!expected) return false;
+export const WEBHOOK_SECRET_HEADER = 'x-webhook-secret';
+
+function safeEqual(expected: string | null | undefined, given: string | undefined) {
+  if (!expected || !given) return false;
   const a = Buffer.from(expected);
   const b = Buffer.from(given);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-type DsPayload = {
-  event_type?: string;
-  data?: { id?: number; submission_id?: number; submission?: { id?: number }; documents?: { name: string; url: string }[]; decline_reason?: string };
-};
+/**
+ * Neither Invoice Ninja nor Docuseal sign their webhooks, so two shared secrets are required:
+ * an unguessable key in the URL path and a secret header configured on the sending side.
+ */
+async function verify(req: FastifyRequest<{ Params: { key: string } }>, which: 'invoiceNinjaWebhookKey' | 'docusealWebhookKey') {
+  const p = await prisma.businessProfile.findUnique({ where: { id: 1 }, select: { [which]: true, webhookSecret: true } }) as Record<string, string | null> | null;
+  const header = req.headers[WEBHOOK_SECRET_HEADER];
+  if (!safeEqual(p?.[which], req.params.key) || !safeEqual(p?.webhookSecret, Array.isArray(header) ? header[0] : header)) {
+    await audit(req, 'webhook.rejected', { user: null, detail: { source: which.replace('WebhookKey', ''), hasHeader: !!header } });
+    throw new HttpError(404, 'Not found');
+  }
+}
 
 export async function webhookRoutes(app: FastifyInstance) {
   app.post<{ Params: { key: string } }>('/api/webhooks/invoice-ninja/:key', async (req) => {
-    const p = await prisma.businessProfile.findUnique({ where: { id: 1 } });
-    if (!keyMatches(p?.invoiceNinjaWebhookKey ?? null, req.params.key)) throw new HttpError(404, 'Not found');
-    const body = req.body as Record<string, unknown>;
-    const evt = await prisma.webhookEvent.create({ data: { source: 'invoice-ninja', event: String(body?.entity_type ?? 'unknown'), payload: body as object } });
-    // Process asynchronously; we re-fetch authoritative state from the API rather than trusting the payload.
-    await enqueue('webhook.invoiceNinja', { eventId: evt.id });
+    await verify(req, 'invoiceNinjaWebhookKey');
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const evt = await prisma.webhookEvent.create({ data: { source: 'invoice-ninja', event: String(body.entity_type ?? 'unknown'), payload: body as object } });
+    // Processed asynchronously; the worker re-fetches authoritative state from the API.
+    await enqueue('webhook.process', { eventId: evt.id }, { jobId: `webhook-${evt.id}` });
     return { ok: true };
   });
 
   app.post<{ Params: { key: string } }>('/api/webhooks/docuseal/:key', async (req) => {
-    const p = await prisma.businessProfile.findUnique({ where: { id: 1 } });
-    if (!keyMatches(p?.docusealWebhookKey ?? null, req.params.key)) throw new HttpError(404, 'Not found');
-    const body = req.body as DsPayload;
-    const event = body?.event_type ?? 'unknown';
-    const evt = await prisma.webhookEvent.create({ data: { source: 'docuseal', event, payload: body as object } });
-    const submissionId = body.data?.submission_id ?? body.data?.submission?.id ?? (event.startsWith('submission.') ? body.data?.id : undefined);
-    const contract = submissionId ? await prisma.contract.findFirst({ where: { docusealSubmissionId: String(submissionId) }, include: { booking: true } }) : null;
-    if (!contract) {
-      await prisma.webhookEvent.update({ where: { id: evt.id }, data: { processed: true, error: 'No matching contract' } });
-      return { ok: true };
-    }
-    const now = new Date();
-    if (event === 'form.viewed' || event === 'form.started') {
-      if (contract.status === 'SENT') {
-        await prisma.contract.update({ where: { id: contract.id }, data: { status: 'VIEWED', viewedAt: now } });
-        if (contract.booking.status === 'CONTRACT_SENT') await prisma.booking.update({ where: { id: contract.bookingId }, data: { status: 'CONTRACT_VIEWED' } });
-      }
-    } else if (event === 'form.completed' || event === 'submission.completed') {
-      await prisma.contract.update({ where: { id: contract.id }, data: { status: 'SIGNED', signedAt: now } });
-      if (['CONTRACT_SENT', 'CONTRACT_VIEWED', 'CONFIRMED', 'QUOTED', 'ENQUIRY'].includes(contract.booking.status))
-        await prisma.booking.update({ where: { id: contract.bookingId }, data: { status: 'CONTRACT_SIGNED' } });
-      await notify('contract', `Contract signed for ${contract.booking.reference}`, contract.bookingId);
-      await enqueue('contract.fetchSigned', { contractId: contract.id, documents: body.data?.documents ?? [] }, { jobId: `contract-signed-${contract.id}` });
-    } else if (event === 'form.declined') {
-      await prisma.contract.update({ where: { id: contract.id }, data: { status: 'DECLINED' } });
-      await prisma.booking.update({ where: { id: contract.bookingId }, data: { status: 'CONTRACT_DECLINED' } });
-      await notify('contract', `Contract DECLINED for ${contract.booking.reference}${body.data?.decline_reason ? `: ${body.data.decline_reason}` : ''}`, contract.bookingId);
-    }
-    await prisma.webhookEvent.update({ where: { id: evt.id }, data: { processed: true } });
+    await verify(req, 'docusealWebhookKey');
+    const body = (req.body ?? {}) as { event_type?: string };
+    const evt = await prisma.webhookEvent.create({ data: { source: 'docuseal', event: body.event_type ?? 'unknown', payload: body as object } });
+    await enqueue('webhook.process', { eventId: evt.id }, { jobId: `webhook-${evt.id}` });
     return { ok: true };
+  });
+
+  // ---- Admin: inspect and replay received events ----
+  app.get<{ Querystring: { status?: string; source?: string } }>('/api/webhook-events', async (req) => {
+    requireRole(req, 'ADMIN');
+    const { status, source } = req.query;
+    return prisma.webhookEvent.findMany({
+      where: {
+        ...(source ? { source } : {}),
+        ...(status === 'failed' ? { processed: false, error: { not: null } } : status === 'pending' ? { processed: false } : status === 'processed' ? { processed: true } : {}),
+      },
+      orderBy: { receivedAt: 'desc' }, take: 200,
+    });
+  });
+
+  app.post<{ Params: { id: string } }>('/api/webhook-events/:id/replay', async (req) => {
+    requireRole(req, 'ADMIN');
+    const evt = await prisma.webhookEvent.update({ where: { id: req.params.id }, data: { processed: false, error: null } });
+    await enqueue('webhook.process', { eventId: evt.id }, { jobId: `webhook-${evt.id}-replay-${Date.now()}` });
+    return { queued: true };
+  });
+
+  app.post('/api/webhook-events/replay-failed', async (req) => {
+    requireRole(req, 'ADMIN');
+    const { olderThanMinutes } = z.object({ olderThanMinutes: z.number().min(0).default(0) }).parse(req.body ?? {});
+    const failed = await prisma.webhookEvent.findMany({ where: { processed: false, receivedAt: { lt: new Date(Date.now() - olderThanMinutes * 60_000) } }, select: { id: true } });
+    for (const e of failed) await enqueue('webhook.process', { eventId: e.id }, { jobId: `webhook-${e.id}-replay-${Date.now()}` });
+    return { queued: failed.length };
   });
 }

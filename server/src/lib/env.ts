@@ -18,6 +18,9 @@ export const env = {
   port: Number(process.env.PORT ?? 3000),
   publicUrl: process.env.PUBLIC_URL ?? '',
   webDist: process.env.WEB_DIST ?? '',
+  // Which hops may set X-Forwarded-* (client IP drives login throttling). Defaults to
+  // loopback + private networks, i.e. a reverse proxy on the same host or Docker network.
+  trustProxy: process.env.TRUST_PROXY ?? 'loopback,linklocal,uniquelocal',
   production: process.env.NODE_ENV === 'production',
 };
 

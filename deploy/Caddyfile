@@ -1,0 +1,12 @@
+# Caddy (automatic HTTPS). Replace the hostname with your subdomain.
+# Caddy forwards Host / X-Forwarded-For / X-Forwarded-Proto by default.
+hire.example.com {
+	encode zstd gzip
+
+	# Uploads (logo, equipment photos) are capped at 10 MB by the app.
+	request_body {
+		max_size 12MB
+	}
+
+	reverse_proxy 127.0.0.1:3000
+}

@@ -147,6 +147,43 @@ features stay disabled until you connect them in Settings.
   outstanding bonds. The dashboard shows the week ahead, overdue returns, unsigned contracts
   and outstanding invoices.
 
+## Security
+
+- **Sign-in throttling:** after 5 failed attempts an account is locked for 15 minutes, and an IP
+  is locked after 20 failures. Attempts return `429` with `Retry-After`. Counters live in memory
+  (single instance) and reset on restart.
+- **Session revocation:** sessions carry a per-user version. Changing your password, an admin
+  resetting a password, changing someone's role or disabling them, and **Settings → My account →
+  Sign out everywhere else** all invalidate existing sessions immediately.
+- **Audit log** (Settings → Audit log, admins only): every sign-in, failed or throttled sign-in,
+  setup step and state-changing API call, with user, IP, result and request body. Secrets
+  (tokens, passwords, GUIDs, keys) are redacted before storage, and large bodies are reduced to their field names.
+- **Webhooks:** Invoice Ninja and Docuseal don't sign their webhooks, so each request needs both
+  an unguessable URL key *and* an `X-Webhook-Secret` header (shown in Settings). "Register
+  webhooks" configures Invoice Ninja's header automatically. In Docuseal, add it as a custom
+  header. Events are stored and processed by retryable jobs. **Settings → Webhook log** shows
+  failures and lets you replay any event.
+- **CSRF / headers:** cookies are `HttpOnly`, `SameSite=Lax` and `Secure` in production. State-changing
+  requests with a foreign `Origin` are refused. Responses carry `nosniff`, `X-Frame-Options`,
+  `Referrer-Policy`, HSTS (production) and a strict Content-Security-Policy on HTML.
+- **Proxy trust:** `X-Forwarded-*` is only honoured from loopback/private networks unless
+  `TRUST_PROXY` says otherwise (see `deploy/README.md`), so clients can't spoof their IP past the
+  throttle.
+
+## Reverse proxy
+
+`deploy/Caddyfile` and `deploy/nginx.conf` are ready-to-edit examples. `deploy/README.md` has
+the checklist (`PUBLIC_URL`, host header, `TRUST_PROXY`, upload size).
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push and PR. It:
+- type-checks and tests the server against a Postgres service, including the full e2e flow
+- checks that the migrations match the schema
+- type-checks, tests and builds the web app
+- builds the Docker image and boots the compose stack from an empty database to confirm
+  that setup is forced and the worker starts.
+
 ## Development
 
 ```sh
@@ -158,7 +195,7 @@ npm run dev -w web         # Vite on :5173, proxies /api
 npm run worker -w server   # optional, when REDIS_URL is set
 ```
 
-Tests: `npm test -w server` runs the unit tests (pricing/GST, ABN/ACN/BSB).
+Tests: `npm test` runs both suites. `npm test -w server` covers pricing/GST, ABN/ACN/BSB, the rate limiter and audit redaction. `npm test -w web` covers timezone handling, UI primitives and the login screen.
 The end-to-end suite also runs when `TEST_DATABASE_URL` points to a
 **dedicated, disposable** database. It drops and recreates that database's
 `public` schema, then drives setup → booking → Docuseal → return → Invoice Ninja → paid

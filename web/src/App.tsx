@@ -1,20 +1,32 @@
-import { useEffect } from 'react';
+import { ComponentType, Suspense, lazy, useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useMe, useSettings, useSetupStatus } from '@/lib/hooks';
 import { applyBranding } from '@/lib/branding';
 import { Spinner } from '@/components/ui';
 import Layout from '@/components/Layout';
-import Setup from '@/pages/Setup';
-import Login from '@/pages/Login';
-import Dashboard from '@/pages/Dashboard';
-import CalendarPage from '@/pages/Calendar';
-import { BookingList, BookingForm, BookingDetail } from '@/pages/Bookings';
-import { EquipmentList, EquipmentDetail, Availability } from '@/pages/Equipment';
-import { ClientList, ClientDetail } from '@/pages/Clients';
-import { StaffList, StaffDetail, MySchedule } from '@/pages/Staff';
-import { TemplateList, TemplateEditor, ClauseLibrary } from '@/pages/Contracts';
-import Reports from '@/pages/Reports';
-import SettingsPage from '@/pages/Settings';
+// Pages load on demand so heavy libraries (FullCalendar, TipTap) stay out of the initial bundle.
+const page = <T extends Record<string, ComponentType<any>>>(load: () => Promise<T>, name: keyof T) =>
+  lazy(() => load().then((m) => ({ default: m[name] })));
+const Setup = page(() => import('@/pages/Setup'), 'default');
+const Login = page(() => import('@/pages/Login'), 'default');
+const Dashboard = page(() => import('@/pages/Dashboard'), 'default');
+const CalendarPage = page(() => import('@/pages/Calendar'), 'default');
+const BookingList = page(() => import('@/pages/Bookings'), 'BookingList');
+const BookingForm = page(() => import('@/pages/Bookings'), 'BookingForm');
+const BookingDetail = page(() => import('@/pages/Bookings'), 'BookingDetail');
+const EquipmentList = page(() => import('@/pages/Equipment'), 'EquipmentList');
+const EquipmentDetail = page(() => import('@/pages/Equipment'), 'EquipmentDetail');
+const Availability = page(() => import('@/pages/Equipment'), 'Availability');
+const ClientList = page(() => import('@/pages/Clients'), 'ClientList');
+const ClientDetail = page(() => import('@/pages/Clients'), 'ClientDetail');
+const StaffList = page(() => import('@/pages/Staff'), 'StaffList');
+const StaffDetail = page(() => import('@/pages/Staff'), 'StaffDetail');
+const MySchedule = page(() => import('@/pages/Staff'), 'MySchedule');
+const TemplateList = page(() => import('@/pages/Contracts'), 'TemplateList');
+const TemplateEditor = page(() => import('@/pages/Contracts'), 'TemplateEditor');
+const ClauseLibrary = page(() => import('@/pages/Contracts'), 'ClauseLibrary');
+const Reports = page(() => import('@/pages/Reports'), 'default');
+const SettingsPage = page(() => import('@/pages/Settings'), 'default');
 
 export default function App() {
   const setup = useSetupStatus();
@@ -28,13 +40,14 @@ export default function App() {
 
   if (setup.isLoading) return <Spinner />;
   // First run: every route goes to the wizard until the business profile exists.
-  if (setup.data?.needsSetup) return loc.pathname === '/setup' ? <Setup /> : <Navigate to="/setup" replace />;
+  if (setup.data?.needsSetup) return loc.pathname === '/setup' ? <Suspense fallback={<Spinner />}><Setup /></Suspense> : <Navigate to="/setup" replace />;
   if (loc.pathname === '/setup') return <Navigate to="/" replace />;
   if (me.isLoading) return <Spinner />;
-  if (!me.data) return <Login />;
+  if (!me.data) return <Suspense fallback={<Spinner />}><Login /></Suspense>;
 
   return (
     <Layout>
+      <Suspense fallback={<Spinner />}>
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/calendar" element={<CalendarPage />} />
@@ -57,6 +70,7 @@ export default function App() {
         <Route path="/settings/*" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </Suspense>
     </Layout>
   );
 }

@@ -10,6 +10,7 @@ import { env } from './lib/env.js';
 import { prisma } from './lib/db.js';
 import { HttpError, guardMutation, loadUser } from './lib/auth.js';
 import { IntegrationError } from './services/http.js';
+import { audit, entityOf } from './lib/audit.js';
 import { authRoutes } from './routes/auth.js';
 import { setupRoutes } from './routes/setup.js';
 import { settingsRoutes } from './routes/settings.js';
@@ -31,7 +32,7 @@ const PRE_SETUP = ['/api/setup', '/api/auth', '/api/health'];
 const PUBLIC = ['/api/auth/login', '/api/setup/status', '/api/health', '/api/webhooks/', '/api/branding/'];
 
 export async function buildApp(): Promise<FastifyInstance> {
-  const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 5 * 1024 * 1024, trustProxy: true });
+  const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 5 * 1024 * 1024, trustProxy: env.trustProxy });
   await app.register(cookie, { secret: env.sessionSecret });
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024, files: 10 } });
 
@@ -40,9 +41,21 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.decorateRequest('user', null);
 
+  const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  // POST endpoints that only compute/preview and change nothing: not worth an audit entry.
+  const READ_ONLY_POSTS = new Set(['/api/templates/preview', '/api/bookings/check', '/api/setup/validate/:section', '/api/setup/abn-lookup', '/api/setup/test/invoice-ninja', '/api/setup/test/docuseal']);
+
   app.addHook('onRequest', async (req) => {
     if (!req.url.startsWith('/api/')) return;
     const path = req.url.split('?')[0];
+    // CSRF defence in depth (cookies are already SameSite=Lax): browsers send Origin on
+    // cross-site requests, so a mutating request from another origin is refused.
+    if (MUTATING.has(req.method) && req.headers.origin && !path.startsWith('/api/webhooks/')) {
+      let originHost = '';
+      try { originHost = new URL(req.headers.origin).host; } catch { /* malformed */ }
+      // req.host honours X-Forwarded-Host only when it comes from a trusted proxy.
+      if (originHost !== req.host) throw new HttpError(403, 'Cross-origin request refused');
+    }
     req.user = await loadUser(req);
     const profile = await prisma.businessProfile.findUnique({ where: { id: 1 }, select: { id: true } });
     if (!profile && !PRE_SETUP.some((p) => path.startsWith(p))) {
@@ -52,6 +65,34 @@ export async function buildApp(): Promise<FastifyInstance> {
     if (path.startsWith('/api/setup') && !profile) return; // setup routes do their own checks
     if (!req.user) throw new HttpError(401, 'Not signed in');
     guardMutation(req);
+  });
+
+  // Record every state-changing API call (auth, setup and webhooks write their own richer entries).
+  app.addHook('onResponse', async (req, reply) => {
+    if (!MUTATING.has(req.method) || !req.url.startsWith('/api/')) return;
+    const route = req.routeOptions.url;
+    if (!route || READ_ONLY_POSTS.has(route) || /^\/api\/(auth|webhooks)\//.test(route) || route === '/api/setup/admin' || route === '/api/setup/finish') return;
+    if (!req.user) return; // unauthenticated attempts are rejected before doing anything
+    const { entity, entityId } = entityOf(route, req.params as Record<string, string>);
+    let detail: unknown;
+    if (req.body && typeof req.body === 'object' && !req.isMultipart()) {
+      const json = JSON.stringify(req.body);
+      detail = json.length <= 4000 ? req.body : { truncated: true, keys: Object.keys(req.body as object) };
+    }
+    await audit(req, `${req.method} ${route}`, { entity, entityId, status: reply.statusCode, detail });
+  });
+
+  // Baseline security headers for API and SPA responses.
+  app.addHook('onSend', async (req, reply, payload) => {
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'same-origin');
+    if (!reply.hasHeader('X-Frame-Options')) reply.header('X-Frame-Options', 'SAMEORIGIN');
+    if (env.production) reply.header('Strict-Transport-Security', 'max-age=15552000');
+    const type = String(reply.getHeader('content-type') ?? '');
+    if (type.startsWith('text/html') && !reply.hasHeader('Content-Security-Policy')) {
+      reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'");
+    }
+    return payload;
   });
 
   app.setErrorHandler((err, req, reply) => {

@@ -39,8 +39,8 @@ run('end-to-end', () => {
   let app: FastifyInstance;
   let mock: { server: Server; url: string };
   let cookie = '';
-  const api = async (method: string, url: string, payload?: unknown) => {
-    const res = await app.inject({ method: method as any, url, payload: payload as any, headers: cookie ? { cookie } : {} });
+  const api = async (method: string, url: string, payload?: unknown, headers: Record<string, string> = {}) => {
+    const res = await app.inject({ method: method as any, url, payload: payload as any, headers: { ...(cookie ? { cookie } : {}), ...headers } });
     const set = res.headers['set-cookie'];
     if (set) cookie = (Array.isArray(set) ? set[0] : set).split(';')[0];
     return { status: res.statusCode, body: res.headers['content-type']?.includes('json') ? res.json() : res.body };
@@ -118,7 +118,12 @@ run('end-to-end', () => {
     expect(htmlCall?.body.submitters[0].email).toBe('c@example.com');
     expect(htmlCall?.body.documents[0].html).toContain('signature-field');
     const settings = await prisma().businessProfile.findUnique({ where: { id: 1 } });
-    await api('POST', `/api/webhooks/docuseal/${settings!.docusealWebhookKey}`, { event_type: 'form.completed', data: { id: 9, submission_id: 555 } });
+    const hook = `/api/webhooks/docuseal/${settings!.docusealWebhookKey}`;
+    const evt = { event_type: 'form.completed', data: { id: 9, submission_id: 555 } };
+    // Correct URL key but missing / wrong secret header is rejected.
+    expect((await api('POST', hook, evt)).status).toBe(404);
+    expect((await api('POST', hook, evt, { 'x-webhook-secret': 'nope' })).status).toBe(404);
+    expect((await api('POST', hook, evt, { 'x-webhook-secret': settings!.webhookSecret! })).status).toBe(200);
     await settle();
     const b = (await api('GET', `/api/bookings/${bookingId}`)).body;
     expect(b.status).toBe('CONTRACT_SIGNED');
@@ -141,18 +146,81 @@ run('end-to-end', () => {
     expect(Number(b.invoices[0].total)).toBe(577.5);
     invoiceStatus = '4';
     const settings = await prisma().businessProfile.findUnique({ where: { id: 1 } });
-    await api('POST', `/api/webhooks/invoice-ninja/${settings!.invoiceNinjaWebhookKey}`, { id: 'inv1', entity_type: 'invoice' });
+    await api('POST', `/api/webhooks/invoice-ninja/${settings!.invoiceNinjaWebhookKey}`, { id: 'inv1', entity_type: 'invoice' }, { 'x-webhook-secret': settings!.webhookSecret! });
     await settle();
     b = (await api('GET', `/api/bookings/${bookingId}`)).body;
     expect(b.status).toBe('PAID');
   });
 
+  it('records webhook events and allows replay', async () => {
+    const events = (await api('GET', '/api/webhook-events')).body;
+    expect(events.length).toBeGreaterThanOrEqual(2);
+    expect(events.every((e: any) => e.processed)).toBe(true);
+    const r = await api('POST', `/api/webhook-events/${events[0].id}/replay`);
+    expect(r.body.queued).toBe(true);
+    await settle();
+    expect((await api('GET', '/api/webhook-events')).body.find((e: any) => e.id === events[0].id).attempts).toBe(2);
+  });
+
+  it('writes an audit trail without secrets', async () => {
+    await api('PUT', '/api/settings/docuseal', { docusealUrl: `${mock.url}/ds`, docusealToken: 'new-secret-token' });
+    const log = (await api('GET', '/api/audit')).body;
+    const entry = log.find((l: any) => l.action === 'PUT /api/settings/:section');
+    expect(entry.userName).toBe('Admin');
+    expect(entry.detail.docusealToken).toBe('[redacted]');
+    expect(JSON.stringify(log)).not.toContain('new-secret-token');
+    expect(log.some((l: any) => l.action === 'POST /api/bookings/:id/contracts' && l.entity === 'bookings')).toBe(true);
+    expect(log.some((l: any) => l.action === 'setup.finished')).toBe(true);
+  });
+
+  it('refuses cross-origin mutations and sets security headers', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/clients', payload: { type: 'INDIVIDUAL', name: 'x' }, headers: { cookie, origin: 'https://evil.example', host: 'localhost' } });
+    expect(res.statusCode).toBe(403);
+    const ok = await app.inject({ method: 'POST', url: '/api/clients', payload: { type: 'INDIVIDUAL', name: 'x' }, headers: { cookie, origin: 'http://localhost', host: 'localhost' } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['x-content-type-options']).toBe('nosniff');
+    expect(ok.headers['x-frame-options']).toBe('SAMEORIGIN');
+  });
+
+  it('revokes other sessions on password change and sign-out-everywhere', async () => {
+    const other = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@example.com', password: 'longpassword1' } });
+    const otherCookie = String(other.headers['set-cookie']).split(';')[0];
+    const me = () => app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: otherCookie } });
+    expect((await me()).statusCode).toBe(200);
+    expect((await api('POST', '/api/auth/password', { current: 'longpassword1', next: 'longpassword2' })).status).toBe(200);
+    expect((await me()).statusCode).toBe(401); // other device signed out
+    expect((await api('GET', '/api/auth/me')).status).toBe(200); // this session re-issued
+    const before = cookie;
+    await api('POST', '/api/auth/logout-all');
+    expect((await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: before } })).statusCode).toBe(401);
+    expect((await api('GET', '/api/auth/me')).status).toBe(200);
+  });
+
+  it('throttles repeated failed sign-ins', async () => {
+    const attempt = (password: string) => app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@example.com', password }, remoteAddress: '10.9.9.9' });
+    for (let i = 0; i < 5; i++) expect((await attempt('wrong-password')).statusCode).toBe(401);
+    const blocked = await attempt('longpassword2'); // even the right password is refused while locked
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.headers['retry-after']).toBeTruthy();
+    const log = (await api('GET', '/api/audit?q=auth.login')).body;
+    expect(log.some((l: any) => l.action === 'auth.login_failed')).toBe(true);
+    expect(log.some((l: any) => l.action === 'auth.login_throttled')).toBe(true);
+  });
+
   it('enforces read-only role', async () => {
-    await api('POST', '/api/users', { name: 'RO', email: 'ro@example.com', password: 'longpassword1', role: 'READ_ONLY' });
+    const ro = (await api('POST', '/api/users', { name: 'RO', email: 'ro@example.com', password: 'longpassword1', role: 'READ_ONLY' })).body;
+    const adminCookie = cookie;
     cookie = '';
     await api('POST', '/api/auth/login', { email: 'ro@example.com', password: 'longpassword1' });
     expect((await api('GET', '/api/equipment')).status).toBe(200);
     expect((await api('POST', '/api/equipment', { name: 'x', dailyRate: 1 })).status).toBe(403);
+    expect((await api('GET', '/api/audit')).status).toBe(403);
+    // An admin disabling the account ends its session immediately.
+    const roCookie = cookie;
+    cookie = adminCookie;
+    await api('PATCH', `/api/users/${ro.id}`, { active: false });
+    cookie = roCookie;
+    expect((await api('GET', '/api/equipment')).status).toBe(401);
   });
 });
 

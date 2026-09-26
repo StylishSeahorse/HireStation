@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { computeTotals, usageLines } from './pricing.js';
 import { isValidAbn, isValidAcn, isValidBsb } from './au.js';
 import { hireDays } from './dates.js';
+import { RateLimiter } from './rateLimit.js';
+import { redact } from './audit.js';
 
 describe('AU validators', () => {
   it('validates ABN checksum', () => {
@@ -59,5 +61,21 @@ describe('pricing', () => {
   it('counts hire days', () => {
     expect(hireDays(new Date('2026-01-01T08:00Z'), new Date('2026-01-01T20:00Z'))).toBe(1);
     expect(hireDays(new Date('2026-01-01T08:00Z'), new Date('2026-01-03T09:00Z'))).toBe(3);
+  });
+});
+
+describe('rate limiter', () => {
+  it('blocks after the limit until the window passes', () => {
+    const rl = new RateLimiter(2, 1000);
+    rl.hit('k', 0); expect(rl.blockedFor('k', 0)).toBe(0);
+    rl.hit('k', 0); expect(rl.blockedFor('k', 10)).toBe(1);
+    expect(rl.blockedFor('k', 1000)).toBe(0);
+    rl.hit('k', 1000); expect(rl.blockedFor('k', 1000)).toBe(0);
+  });
+});
+
+describe('audit redaction', () => {
+  it('redacts secret-looking keys at any depth', () => {
+    expect(redact({ name: 'a', invoiceNinjaToken: 't', nested: { password: 'p', ok: 1 } })).toEqual({ name: 'a', invoiceNinjaToken: '[redacted]', nested: { password: '[redacted]', ok: 1 } });
   });
 });

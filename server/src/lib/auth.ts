@@ -9,9 +9,9 @@ declare module 'fastify' {
   interface FastifyRequest { user: User | null }
 }
 
-export function startSession(reply: FastifyReply, userId: string) {
+export function startSession(reply: FastifyReply, user: { id: string; sessionVersion: number }) {
   const exp = Date.now() + MAX_AGE_S * 1000;
-  reply.setCookie(SESSION_COOKIE, `${userId}.${exp}`, {
+  reply.setCookie(SESSION_COOKIE, `${user.id}.${user.sessionVersion}.${exp}`, {
     signed: true, httpOnly: true, sameSite: 'lax', path: '/', maxAge: MAX_AGE_S,
     secure: process.env.NODE_ENV === 'production',
   });
@@ -26,10 +26,12 @@ export async function loadUser(req: FastifyRequest): Promise<User | null> {
   if (!raw) return null;
   const { valid, value } = req.unsignCookie(raw);
   if (!valid || !value) return null;
-  const [id, exp] = value.split('.');
-  if (!id || Number(exp) < Date.now()) return null;
+  const [id, version, exp] = value.split('.');
+  if (!id || !exp || Number(exp) < Date.now()) return null;
   const user = await prisma.user.findUnique({ where: { id } });
-  return user?.active ? user : null;
+  // A bumped sessionVersion (password change, deactivation, "sign out everywhere") revokes old cookies.
+  if (!user?.active || user.sessionVersion !== Number(version)) return null;
+  return user;
 }
 
 export class HttpError extends Error {

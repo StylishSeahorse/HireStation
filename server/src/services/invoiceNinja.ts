@@ -97,11 +97,14 @@ export class InvoiceNinja {
   }
 
   /** Subscribe Invoice Ninja webhooks to this app. Event ids: 2=create invoice, 8=update invoice, 4=create payment. */
-  async registerWebhooks(targetUrl: string): Promise<void> {
-    const existing = await this.req<{ data: { target_url: string; event_id: string }[] }>('GET', '/webhooks');
+  async registerWebhooks(targetUrl: string, headers: Record<string, string>): Promise<void> {
+    const existing = await this.req<{ data: { id: string; target_url: string; event_id: string }[] }>('GET', '/webhooks');
     for (const event_id of ['2', '4', '8']) {
-      if (existing.data.some((w) => w.target_url === targetUrl && String(w.event_id) === event_id)) continue;
-      await this.req('POST', '/webhooks', { target_url: targetUrl, event_id, format: 'JSON', rest_method: 'post' });
+      const body = { target_url: targetUrl, event_id, format: 'JSON', rest_method: 'post', headers };
+      const found = existing.data.find((w) => w.target_url === targetUrl && String(w.event_id) === event_id);
+      // Update existing subscriptions so a rotated secret header takes effect.
+      if (found) await this.req('PUT', `/webhooks/${found.id}`, body);
+      else await this.req('POST', '/webhooks', body);
     }
   }
 }

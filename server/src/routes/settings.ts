@@ -9,6 +9,14 @@ import { saveFile, removeFile, fileExists, openFile, mimeOf } from '../lib/stora
 import { env } from '../lib/env.js';
 import { adminSchema, newWebhookKey } from './setup.js';
 import { publicUser } from './auth.js';
+import { WEBHOOK_SECRET_HEADER } from './webhooks.js';
+import type { BusinessProfile } from '@prisma/client';
+
+/** Existing installs predate the header secret; create it on first admin view. */
+async function ensureWebhookSecret(p: BusinessProfile) {
+  if (p.webhookSecret) return p;
+  return prisma.businessProfile.update({ where: { id: 1 }, data: { webhookSecret: newWebhookKey() } });
+}
 
 export function webhookUrls(p: { invoiceNinjaWebhookKey: string | null; docusealWebhookKey: string | null }) {
   const base = env.publicUrl.replace(/\/+$/, '');
@@ -20,8 +28,16 @@ export function webhookUrls(p: { invoiceNinjaWebhookKey: string | null; docuseal
 
 export async function settingsRoutes(app: FastifyInstance) {
   app.get('/api/settings', async (req) => {
-    const p = await requireProfile();
-    return { ...publicProfile(p), webhookUrls: req.user?.role === 'ADMIN' ? webhookUrls(p) : null };
+    let p = await requireProfile();
+    if (req.user?.role !== 'ADMIN') return { ...publicProfile(p), webhookUrls: null, webhookSecret: null };
+    p = await ensureWebhookSecret(p);
+    return { ...publicProfile(p), webhookUrls: webhookUrls(p), webhookSecretHeader: WEBHOOK_SECRET_HEADER, webhookSecret: p.webhookSecret };
+  });
+
+  app.post('/api/settings/webhook-secret', async (req) => {
+    requireRole(req, 'ADMIN');
+    await prisma.businessProfile.update({ where: { id: 1 }, data: { webhookSecret: newWebhookKey() } });
+    return { ok: true };
   });
 
   app.put<{ Params: { section: string } }>('/api/settings/:section', async (req) => {
@@ -47,7 +63,8 @@ export async function settingsRoutes(app: FastifyInstance) {
     const { client, profile } = await invoiceNinjaClient();
     const url = webhookUrls(profile).invoiceNinja;
     if (!url || !env.publicUrl) throw new HttpError(400, 'PUBLIC_URL must be set for webhooks to be reachable');
-    await client.registerWebhooks(url);
+    const secret = (await ensureWebhookSecret(profile)).webhookSecret!;
+    await client.registerWebhooks(url, { [WEBHOOK_SECRET_HEADER]: secret });
     return { ok: true, url };
   });
 
@@ -87,6 +104,20 @@ export async function settingsRoutes(app: FastifyInstance) {
     return reply.send(openFile(p.logoPath));
   });
 
+  // ---- Audit log (admin) ----
+  app.get<{ Querystring: { q?: string; userId?: string; entity?: string; entityId?: string; before?: string } }>('/api/audit', async (req) => {
+    requireRole(req, 'ADMIN');
+    const { q, userId, entity, entityId, before } = req.query;
+    return prisma.auditLog.findMany({
+      where: {
+        ...(userId ? { userId } : {}), ...(entity ? { entity } : {}), ...(entityId ? { entityId } : {}),
+        ...(q ? { OR: [{ action: { contains: q, mode: 'insensitive' } }, { userName: { contains: q, mode: 'insensitive' } }] } : {}),
+        ...(before ? { at: { lt: new Date(before) } } : {}),
+      },
+      orderBy: { at: 'desc' }, take: 100,
+    });
+  });
+
   // ---- Users (admin) ----
   app.get('/api/users', async (req) => {
     requireRole(req, 'ADMIN');
@@ -110,14 +141,14 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (req.params.id === req.user!.id && (body.role && body.role !== 'ADMIN' || body.active === false))
       throw new HttpError(400, 'You cannot demote or deactivate your own account');
     const { password, ...rest } = body;
-    const u = await prisma.user.update({ where: { id: req.params.id }, data: { ...rest, ...(password ? { passwordHash: await bcrypt.hash(password, 12) } : {}) } });
+    const before = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!before) throw new HttpError(404, 'User not found');
+    // Any change to credentials, role or access revokes that user's existing sessions.
+    const revoke = !!password || (body.role !== undefined && body.role !== before.role) || body.active === false;
+    const u = await prisma.user.update({
+      where: { id: req.params.id },
+      data: { ...rest, ...(password ? { passwordHash: await bcrypt.hash(password, 12) } : {}), ...(revoke ? { sessionVersion: { increment: 1 } } : {}) },
+    });
     return { ...publicUser(u), active: u.active };
-  });
-
-  app.post('/api/auth/password', async (req) => {
-    const body = z.object({ current: z.string(), next: z.string().min(10) }).parse(req.body);
-    if (!(await bcrypt.compare(body.current, req.user!.passwordHash))) throw new HttpError(400, 'Current password is incorrect');
-    await prisma.user.update({ where: { id: req.user!.id }, data: { passwordHash: await bcrypt.hash(body.next, 12) } });
-    return { ok: true };
   });
 }

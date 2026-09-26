@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hirestation
+          POSTGRES_PASSWORD: hirestation
+          POSTGRES_DB: hirestation_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hirestation" --health-interval 5s --health-retries 10
+    env:
+      # Disposable CI database; the e2e suite recreates its schema.
+      TEST_DATABASE_URL: postgresql://hirestation:hirestation@localhost:5432/hirestation_test
+      DATABASE_URL: postgresql://hirestation:hirestation@localhost:5432/hirestation_test
+      SESSION_SECRET: ci-only-session-secret-ci-only-session-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx prisma generate
+        working-directory: server
+      - name: Migrations match schema
+        working-directory: server
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$DATABASE_URL" --exit-code
+      - run: npm run typecheck -w server
+      - run: npm test -w server
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck -w web
+      - run: npm test -w web
+      - run: npm run build -w web
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [server, web]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker compose build app
+      - name: Boot the stack from an empty database
+        run: |
+          printf 'SESSION_SECRET=%s\nPOSTGRES_PASSWORD=ci\nPUBLIC_URL=http://localhost:3000\n' "$(openssl rand -hex 32)" > .env
+          docker compose up -d --no-build
+          for i in $(seq 1 30); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' $(docker compose ps -q app))" = healthy ] && break
+            sleep 3
+          done
+          docker compose ps
+      - name: Fresh install forces setup and serves the SPA
+        run: |
+          curl -fsS localhost:3000/api/setup/status | tee /dev/stderr | grep -q '"needsSetup":true'
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3000/api/equipment)" = 409
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:3000/bookings)" = 200
+          docker compose logs worker | grep -q 'Worker started'
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs

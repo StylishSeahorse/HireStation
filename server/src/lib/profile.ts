@@ -18,7 +18,7 @@ export function taxOf(p: BusinessProfile) {
 
 /** Profile as sent to the browser: secrets removed, presence flags added. */
 export function publicProfile(p: BusinessProfile) {
-  const { invoiceNinjaToken, docusealToken, invoiceNinjaWebhookKey, docusealWebhookKey, abrGuid, ...rest } = p;
+  const { invoiceNinjaToken, docusealToken, invoiceNinjaWebhookKey, docusealWebhookKey, webhookSecret, abrGuid, ...rest } = p;
   return {
     ...rest,
     gstRate: Number(p.gstRate),

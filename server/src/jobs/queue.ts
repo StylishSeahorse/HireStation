@@ -8,7 +8,7 @@ export type JobName =
   | 'invoice.generate'
   | 'contract.send'
   | 'contract.fetchSigned'
-  | 'webhook.invoiceNinja'
+  | 'webhook.process'
   | 'reminders.scan';
 
 let queue: Queue | null = null;

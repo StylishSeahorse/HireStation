@@ -1,7 +1,8 @@
 import { prisma } from '../lib/db.js';
-import { generateInvoice, syncInvoice } from '../services/invoicing.js';
+import { generateInvoice } from '../services/invoicing.js';
+import { runWebhookEvent } from '../services/webhooks.js';
 import { fetchSignedPdf, sendContract } from '../services/contracts.js';
-import { invoiceNinjaClient, docusealClient, getProfile } from '../lib/profile.js';
+import { docusealClient, getProfile } from '../lib/profile.js';
 import { notify } from '../lib/bookings.js';
 import type { JobName } from './queue.js';
 
@@ -19,24 +20,7 @@ export const handlers: Record<JobName, (d: Data) => Promise<unknown>> = {
   'contract.send': (d) => sendContract(d.contractId as string),
   'contract.fetchSigned': (d) => fetchSignedPdf(d.contractId as string, d.documents as { name: string; url: string }[]),
 
-  'webhook.invoiceNinja': async (d) => {
-    const evt = await prisma.webhookEvent.findUnique({ where: { id: d.eventId as string } });
-    if (!evt || evt.processed) return;
-    const payload = evt.payload as { id?: string; entity_type?: string; invoice_id?: string; invoices?: { invoice_id?: string; id?: string }[]; paymentables?: { invoice_id?: string }[] };
-    const ids = new Set<string>();
-    const isPayment = payload.entity_type === 'payment' || !!payload.paymentables || (Array.isArray(payload.invoices) && !payload.invoice_id);
-    if (isPayment) {
-      for (const i of payload.invoices ?? []) if (i.invoice_id || i.id) ids.add((i.invoice_id ?? i.id)!);
-      for (const i of payload.paymentables ?? []) if (i.invoice_id) ids.add(i.invoice_id);
-      if (!ids.size && payload.id) {
-        const { client } = await invoiceNinjaClient();
-        const pay = (await client.getPayment(payload.id)).data;
-        for (const i of [...(pay.invoices ?? []), ...(pay.paymentables ?? [])]) if (i.invoice_id) ids.add(i.invoice_id);
-      }
-    } else if (payload.id) ids.add(payload.id);
-    for (const id of ids) await syncInvoice(id);
-    await prisma.webhookEvent.update({ where: { id: evt.id }, data: { processed: true } });
-  },
+  'webhook.process': (d) => runWebhookEvent(d.eventId as string),
 
   // Periodic scan: unsigned contracts, unreturned gear, upcoming bookings.
   'reminders.scan': async () => {

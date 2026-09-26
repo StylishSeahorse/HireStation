@@ -12,6 +12,8 @@ import { Docuseal } from '../services/docuseal.js';
 import { isValidAbn, normaliseDigits } from '../lib/au.js';
 import { saveFile } from '../lib/storage.js';
 import { publicUser } from './auth.js';
+import { audit } from '../lib/audit.js';
+import { outboundTests } from '../lib/rateLimit.js';
 
 export const adminSchema = z.object({
   name: z.string().trim().min(1),
@@ -24,6 +26,11 @@ export const newWebhookKey = () => randomBytes(24).toString('hex');
 /** During first run: only the wizard's admin may act. After setup: any admin (settings reuse these tools). */
 async function requireSetupActor(req: Parameters<typeof requireRole>[0]) {
   requireRole(req, 'ADMIN');
+}
+
+function throttleOutbound(req: { ip: string }) {
+  if (outboundTests.blockedFor(req.ip)) throw new HttpError(429, 'Too many connection tests — wait a few minutes');
+  outboundTests.hit(req.ip);
 }
 
 export async function setupRoutes(app: FastifyInstance) {
@@ -39,7 +46,8 @@ export async function setupRoutes(app: FastifyInstance) {
       if ((await tx.user.count()) > 0) throw new HttpError(409, 'An admin account already exists — sign in instead');
       return tx.user.create({ data: { name: body.name, email: body.email, role: 'ADMIN', passwordHash: await bcrypt.hash(body.password, 12) } });
     });
-    startSession(reply, user.id);
+    startSession(reply, user);
+    await audit(req, 'setup.admin_created', { user, entity: 'users', entityId: user.id });
     return publicUser(user);
   });
 
@@ -54,6 +62,7 @@ export async function setupRoutes(app: FastifyInstance) {
 
   app.post('/api/setup/abn-lookup', async (req) => {
     await requireSetupActor(req);
+    throttleOutbound(req);
     const body = z.object({ abn: z.string(), guid: z.string().optional() }).parse(req.body);
     if (!isValidAbn(body.abn)) throw new HttpError(400, 'Invalid ABN');
     const guid = body.guid || (await getProfile())?.abrGuid;
@@ -63,6 +72,7 @@ export async function setupRoutes(app: FastifyInstance) {
 
   app.post('/api/setup/test/invoice-ninja', async (req) => {
     await requireSetupActor(req);
+    throttleOutbound(req);
     const body = z.object({ url: z.url(), token: z.string().optional() }).parse(req.body);
     const token = body.token || (await getProfile())?.invoiceNinjaToken;
     if (!token) throw new HttpError(400, 'API token is required');
@@ -72,6 +82,7 @@ export async function setupRoutes(app: FastifyInstance) {
 
   app.post('/api/setup/test/docuseal', async (req) => {
     await requireSetupActor(req);
+    throttleOutbound(req);
     const body = z.object({ url: z.url(), token: z.string().optional() }).parse(req.body);
     const token = body.token || (await getProfile())?.docusealToken;
     if (!token) throw new HttpError(400, 'API token is required');
@@ -102,11 +113,13 @@ export async function setupRoutes(app: FastifyInstance) {
       docusealToken: body.docuseal?.docusealToken ?? null,
       invoiceNinjaWebhookKey: newWebhookKey(),
       docusealWebhookKey: newWebhookKey(),
+      webhookSecret: newWebhookKey(),
     };
     await prisma.$transaction(async (tx) => {
       if (await tx.businessProfile.findUnique({ where: { id: 1 } })) throw new HttpError(409, 'Setup already completed');
       await tx.businessProfile.create({ data: { id: 1, ...data } });
     });
+    await audit(req, 'setup.finished', { entity: 'settings' });
     return { ok: true };
   });
 
