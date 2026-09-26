@@ -41,15 +41,33 @@ to the browser.
 ## Deploy (Docker Compose)
 
 ```sh
-cp .env.example .env    # set SESSION_SECRET, POSTGRES_PASSWORD, PUBLIC_URL
+cp .env.example .env    # set SESSION_SECRET, POSTGRES_PASSWORD, PUBLIC_URL (and APP_PORT if 3000 is taken)
 docker compose up -d --build
+```
+
+Then open `http://<host>:APP_PORT` (or your proxied subdomain) and complete the
+setup wizard. Upgrades: `git pull && docker compose up -d --build`. Database
+migrations run automatically when the app container starts.
+
+The image is a two-stage build (`node:22-bookworm` → `node:22-bookworm-slim`,
+runs as the non-root `node` user, ~185 MB compressed). It needs no `apt-get`:
+the OpenSSL libraries Prisma requires are copied from the build stage. `app`
+and `worker` share one image (`hirestation:latest`), which is built by the `app`
+service.
+
+**Restore from backup**
+
+```sh
+docker compose exec -T db pg_restore -U hirestation -d hirestation --clean < backups/db-YYYYMMDD-HHMMSS.dump
+docker compose run --rm -v "$PWD/backups:/backups" app sh -c 'tar -xzf /backups/storage-YYYYMMDD-HHMMSS.tar.gz -C /data'
 ```
 
 Services: `app` (API + SPA, runs `prisma migrate deploy` on start), `worker`
 (BullMQ: contract sends, invoice generation, webhook processing, hourly reminder
 scan), `db`, `redis`, and `backup` (nightly `pg_dump` + storage tarball into
 `BACKUP_PATH`, pruned after `BACKUP_KEEP_DAYS`). Put `app` behind your existing
-reverse proxy on its own subdomain. It binds to `127.0.0.1:3000` by default.
+reverse proxy on its own subdomain. It is published on `APP_BIND:APP_PORT`
+(default `127.0.0.1:3000`). A backup runs when the stack starts and then every 24 hours.
 
 The business profile now lives in the database, not a config file, so include
 `BACKUP_PATH` in your normal off-site backups.
@@ -152,4 +170,3 @@ against mock integration servers.
   surcharge rules exist yet.
 - Invoice Ninja tokens are company-scoped. The company picker records which
   company you intend, so use a token issued for that company.
-- The Docker image and compose file have not been run in CI yet.

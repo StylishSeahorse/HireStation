@@ -2,6 +2,7 @@
 # Docuseal, or brand assets belong here — they are entered in the setup wizard.
 services:
   app:
+    image: hirestation:latest
     build: .
     restart: unless-stopped
     env_file: .env
@@ -9,22 +10,21 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-hirestation}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hirestation}
       REDIS_URL: redis://redis:6379
       STORAGE_PATH: /data
+      PORT: 3000  # inside the container; publish on the host with APP_PORT
     ports:
-      - "${APP_BIND:-127.0.0.1}:${PORT:-3000}:3000"
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000"
     volumes:
       - storage:/data
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 30s
-      timeout: 5s
 
   worker:
-    build: .
+    image: hirestation:latest  # built by the app service
     restart: unless-stopped
     command: ["node", "dist/jobs/worker.js"]
+    healthcheck:
+      disable: true
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-hirestation}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hirestation}
