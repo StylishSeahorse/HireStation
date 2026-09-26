@@ -1,0 +1,116 @@
+# Adds a self-hosted Invoice Ninja v5 (MySQL + PHP app + nginx) to the HireStation stack.
+# Use it together with the base file (and optionally the Docuseal file). The simplest way
+# is a preset: cp .env.full.example .env (see README → Deploy).
+#
+# Invoice Ninja runs its own queue workers and scheduler inside the in-app container.
+# Its first boot migrates the database and creates the admin from IN_USER_EMAIL/IN_PASSWORD.
+
+services:
+  in-db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${IN_DB_ROOT_PASSWORD:?set IN_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ninja
+      MYSQL_USER: ninja
+      MYSQL_PASSWORD: ${IN_DB_PASSWORD:?set IN_DB_PASSWORD}
+    volumes:
+      - in-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uninja -p\"$$MYSQL_PASSWORD\" --silent"]
+      interval: 5s
+      retries: 30
+
+  in-app:
+    image: invoiceninja/invoiceninja-debian:${IN_VERSION:-5.13.43}
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      # Generate once: docker run --rm invoiceninja/invoiceninja-debian php artisan key:generate --show
+      APP_KEY: ${IN_APP_KEY:?set IN_APP_KEY (see .env example)}
+      # Public URL of Invoice Ninja (client portal, invoice links, PDFs).
+      APP_URL: ${IN_URL:?set IN_URL, e.g. https://invoices.example.com}
+      REQUIRE_HTTPS: ${IN_REQUIRE_HTTPS:-true}
+      TRUSTED_PROXIES: "*"
+      IS_DOCKER: "true"
+      DB_CONNECTION: mysql
+      DB_HOST: in-db
+      DB_PORT: "3306"
+      DB_DATABASE: ninja
+      DB_USERNAME: ninja
+      DB_PASSWORD: ${IN_DB_PASSWORD}
+      QUEUE_CONNECTION: database
+      CACHE_DRIVER: file
+      SESSION_DRIVER: file
+      PDF_GENERATOR: snappdf
+      # Used only on first boot to create the Invoice Ninja admin account.
+      IN_USER_EMAIL: ${IN_USER_EMAIL:?set IN_USER_EMAIL}
+      IN_PASSWORD: ${IN_PASSWORD:?set IN_PASSWORD}
+      # Outgoing email (invoices/reminders). Can also be set in Invoice Ninja → Settings → Email.
+      MAIL_MAILER: ${IN_MAIL_MAILER:-smtp}
+      MAIL_HOST: ${IN_MAIL_HOST:-}
+      MAIL_PORT: ${IN_MAIL_PORT:-587}
+      MAIL_USERNAME: ${IN_MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${IN_MAIL_PASSWORD:-}
+      MAIL_ENCRYPTION: ${IN_MAIL_ENCRYPTION:-tls}
+      MAIL_FROM_ADDRESS: ${IN_MAIL_FROM_ADDRESS:-}
+      MAIL_FROM_NAME: ${IN_MAIL_FROM_NAME:-}
+    volumes:
+      - in-public:/var/www/html/public
+      - in-storage:/var/www/html/storage
+    depends_on:
+      in-db: { condition: service_healthy }
+
+  # Invoice Ninja's app container is PHP-FPM only; this nginx serves it.
+  invoiceninja:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - in-public:/var/www/html/public:ro
+      - ./deploy/invoiceninja-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      # Published for your reverse proxy (IN_URL's hostname points here).
+      - "${IN_BIND:-127.0.0.1}:${IN_PORT:-3002}:80"
+    depends_on: [in-app]
+
+  # Nightly Invoice Ninja backup (MySQL dump + uploaded files), alongside HireStation's.
+  in-backup:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_PWD: ${IN_DB_PASSWORD}
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_START_DELAY: ${IN_BACKUP_START_DELAY:-600}
+    volumes:
+      - ${BACKUP_PATH:-./backups}:/backups
+      - in-storage:/in-storage:ro
+    # bash + pipefail so a failed mysqldump can't hide behind a successful gzip; the first run
+    # waits for Invoice Ninja's first-boot migrations (BACKUP_START_DELAY seconds).
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -o pipefail
+        sleep "$${BACKUP_START_DELAY:-600}"
+        while true; do
+          stamp=$$(date +%Y%m%d-%H%M%S)
+          db=/backups/invoiceninja-db-$$stamp.sql.gz
+          files=/backups/invoiceninja-storage-$$stamp.tar.gz
+          if mysqldump -h in-db -u ninja --single-transaction --no-tablespaces ninja | gzip > "$$db" &&
+             tar -czf "$$files" -C /in-storage .; then
+            echo "invoiceninja backup $$stamp complete"
+          else
+            echo "invoiceninja backup $$stamp FAILED" >&2
+            rm -f "$$db" "$$files"
+          fi
+          find /backups -name 'invoiceninja-*' -mtime +$${KEEP_DAYS} -delete
+          sleep 86400
+        done
+    depends_on:
+      in-db: { condition: service_healthy }
+
+volumes:
+  in-mysql:
+  in-public:
+  in-storage:

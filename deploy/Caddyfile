@@ -19,3 +19,12 @@ sign.example.com {
 	}
 	reverse_proxy 127.0.0.1:3001
 }
+
+# Bundled Invoice Ninja (full-stack preset). Must match IN_URL.
+invoices.example.com {
+	encode zstd gzip
+	request_body {
+		max_size 50MB
+	}
+	reverse_proxy 127.0.0.1:3002
+}

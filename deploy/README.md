@@ -1,7 +1,9 @@
 # Reverse proxy
 
 The compose stack publishes the app on `127.0.0.1:3000` (`APP_BIND` / `APP_PORT` in `.env`).
-Point your existing proxy at it using one of these examples:
+With the presets, Docuseal is published on `127.0.0.1:3001` (`DOCUSEAL_PORT`) and, for the full
+stack, Invoice Ninja on `127.0.0.1:3002` (`IN_PORT`), each on its own subdomain.
+Point your existing proxy at them using one of these examples:
 
 - `Caddyfile`: Caddy with automatic HTTPS
 - `nginx.conf`: nginx with certbot certificates

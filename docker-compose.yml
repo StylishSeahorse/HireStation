@@ -5,8 +5,13 @@ services:
     image: hirestation:latest
     build: .
     restart: unless-stopped
-    env_file: .env
-    environment:
+    # Only HireStation's own settings are passed in (not the whole .env, which may also hold
+    # Docuseal / Invoice Ninja secrets when using the bundled presets).
+    environment: &hirestation-env
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      TRUST_PROXY: ${TRUST_PROXY:-loopback,linklocal,uniquelocal}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: postgresql://${POSTGRES_USER:-hirestation}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hirestation}
       REDIS_URL: redis://redis:6379
       STORAGE_PATH: /data
@@ -25,9 +30,8 @@ services:
     command: ["node", "dist/jobs/worker.js"]
     healthcheck:
       disable: true
-    env_file: .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-hirestation}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hirestation}
+      <<: *hirestation-env
       REDIS_URL: redis://redis:6379
       STORAGE_PATH: /data
     volumes:

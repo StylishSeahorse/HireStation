@@ -58,10 +58,14 @@ jobs:
       # Compose needs .env (POSTGRES_PASSWORD etc.) even to parse the file, so write it first.
       - name: Write CI .env
         run: printf 'SESSION_SECRET=%s\nPOSTGRES_PASSWORD=ci\nPUBLIC_URL=http://localhost:3000\n' "$(openssl rand -hex 32)" > .env
-      - name: Bundled-Docuseal compose file is valid
+      - name: Both presets produce valid compose configs
         run: |
-          printf 'DOCUSEAL_HOST=sign.example.com\nDOCUSEAL_DB_PASSWORD=ci\n' >> .env
-          docker compose -f docker-compose.yml -f docker-compose.docuseal.yml config -q
+          for preset in full no-invoiceninja; do
+            cp .env.$preset.example .env.preset-check
+            docker compose --env-file .env.preset-check config -q
+            echo "$preset: $(docker compose --env-file .env.preset-check config --services | sort | tr '\n' ' ')"
+          done
+          rm .env.preset-check
       - name: Build image
         run: docker compose build app
       - name: Boot the stack from an empty database

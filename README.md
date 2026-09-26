@@ -40,70 +40,124 @@ to the browser.
 
 ## Deploy (Docker Compose)
 
+### Choose your stack
+
+There are two ready-made presets. Pick one, copy it to `.env`, fill in the values, and start:
+
+| Preset | Runs | Invoice Ninja |
+|---|---|---|
+| **Full stack** (`.env.full.example`) | HireStation + Docuseal + Invoice Ninja | bundled (new instance) |
+| **Without Invoice Ninja** (`.env.no-invoiceninja.example`) | HireStation + Docuseal | your **existing** instance |
+
 ```sh
-cp .env.example .env    # set SESSION_SECRET, POSTGRES_PASSWORD, PUBLIC_URL (and APP_PORT if 3000 is taken)
+cp .env.full.example .env               # or: cp .env.no-invoiceninja.example .env
+# edit .env: passwords, SESSION_SECRET, public hostnames (and IN_APP_KEY for the full stack)
 docker compose up -d --build
+docker compose ps                       # everything should show as running
 ```
 
-Then open `http://<host>:APP_PORT` (or your proxied subdomain) and complete the
-setup wizard. Upgrades: `git pull && docker compose up -d --build`. Database
-migrations run automatically when the app container starts.
+Each preset sets `COMPOSE_FILE`, so a plain `docker compose …` always uses the right files:
 
-The image is a two-stage build (`node:22-bookworm` → `node:22-bookworm-slim`,
-runs as the non-root `node` user, ~185 MB compressed). It needs no `apt-get`:
-the OpenSSL libraries Prisma requires are copied from the build stage. `app`
-and `worker` share one image (`hirestation:latest`), which is built by the `app`
-service.
+```
+docker-compose.yml                  HireStation: app, worker, Postgres, Redis, backups
+docker-compose.docuseal.yml         + Docuseal and its Postgres
+docker-compose.invoiceninja.yml     + Invoice Ninja: MySQL, PHP app, nginx, backups (full stack only)
+```
 
-**Restore from backup**
+(`.env.example` alone runs just HireStation, with both integrations external.)
+
+Upgrades: `git pull && docker compose up -d --build`. Migrations for all three apps run
+automatically on start. Invoice Ninja and Docuseal are pinned (`IN_VERSION`, `DOCUSEAL_VERSION`);
+bump them deliberately.
+
+### Reverse proxy and public hostnames
+
+Each app gets its own subdomain on your existing reverse proxy. Examples are in `deploy/`.
+
+| App | Published on (host) | `.env` | Example hostname |
+|---|---|---|---|
+| HireStation | `127.0.0.1:APP_PORT` (3000) | `PUBLIC_URL` | `hire.example.com` |
+| Docuseal | `127.0.0.1:DOCUSEAL_PORT` (3001) | `DOCUSEAL_HOST` | `sign.example.com` |
+| Invoice Ninja (full stack) | `127.0.0.1:IN_PORT` (3002) | `IN_URL` | `invoices.example.com` |
+
+`PUBLIC_URL` must resolve to a **public** IP. Invoice Ninja refuses to register webhooks to
+private addresses (see *Integrations → Invoice Ninja*).
+
+### First start: connecting the apps
+
+**Both presets**
+
+1. **Docuseal:** open `https://sign.example.com` and create the Docuseal admin. In
+   Settings → **API**, copy the token.
+2. **HireStation:** open `https://hire.example.com` and run the setup wizard. At the
+   Docuseal step, use URL **`http://docuseal:3000`** (internal network) and that token, then
+   **Test connection**. This also detects the Docuseal edition.
+3. **Docuseal webhook:** Docuseal → Settings → **Webhooks**: add the **internal URL** shown
+   in HireStation under Settings → Docuseal (`http://app:3000/api/webhooks/docuseal/…`). The
+   default events are the right ones. Copy the webhook's **signing secret** (`whsec_…`) into
+   HireStation's "Webhook signing secret" field and save.
+
+**Invoice Ninja: full stack**
+
+4. Open `https://invoices.example.com` and sign in with `IN_USER_EMAIL` / `IN_PASSWORD`
+   (created on first boot). Set up the company (name, tax, invoice design, email), then create
+   an API token under Settings → Account Management → **API Tokens**.
+5. In the HireStation wizard's Invoice Ninja step, use URL **`http://invoiceninja`**
+   (internal network) and that token, then **Test connection** and pick the company.
+
+**Invoice Ninja: without Invoice Ninja preset (existing instance)**
+
+4. In the HireStation wizard's Invoice Ninja step, use **your Invoice Ninja's URL** and an API
+   token from it, then **Test connection** and pick the company.
+
+**Then, for either:**
+
+6. HireStation → Settings → Invoice Ninja → **Register webhooks**. This needs `PUBLIC_URL`
+   to be public; invoices still generate without it, only automatic Sent/Partial/Paid updates
+   depend on the webhook.
+
+### Backups
+
+A `backup` service dumps HireStation's Postgres and uploaded files into `BACKUP_PATH` at
+start-up and then every 24 hours, pruned after `BACKUP_KEEP_DAYS`. With the presets it also covers:
+
+- **Docuseal:** `docuseal-db-*.dump` and `docuseal-data-*.tar.gz`. The data tarball includes
+  `docuseal.env`, the key that decrypts Docuseal's data.
+- **Invoice Ninja (full stack):** `invoiceninja-db-*.sql.gz` and `invoiceninja-storage-*.tar.gz`,
+  first run 10 minutes after start (`IN_BACKUP_START_DELAY`), then daily. A failed dump is
+  logged and removed, never left as an empty file.
+
+Your business profile lives in the database, not a config file. Keep `BACKUP_PATH`, and also
+your `.env` (it holds `IN_APP_KEY`, which Invoice Ninja needs to decrypt its data), in your normal
+off-site backups.
+
+**Restore**
 
 ```sh
-docker compose exec -T db pg_restore -U hirestation -d hirestation --clean < backups/db-YYYYMMDD-HHMMSS.dump
-docker compose run --rm -v "$PWD/backups:/backups" app sh -c 'tar -xzf /backups/storage-YYYYMMDD-HHMMSS.tar.gz -C /data'
+# HireStation
+docker compose exec -T db pg_restore -U hirestation -d hirestation --clean < backups/db-….dump
+docker compose run --rm -v "$PWD/backups:/backups" app sh -c 'tar -xzf /backups/storage-….tar.gz -C /data'
+# Docuseal
+docker compose exec -T docuseal-db pg_restore -U docuseal -d docuseal --clean < backups/docuseal-db-….dump
+#   …and untar docuseal-data-….tar.gz into the docuseal-data volume
+# Invoice Ninja (full stack)
+gunzip -c backups/invoiceninja-db-….sql.gz | docker compose exec -T in-db sh -c 'mysql -uninja -p"$MYSQL_PASSWORD" ninja'
+#   …and untar invoiceninja-storage-….tar.gz into the in-storage volume
 ```
 
-Services: `app` (API + SPA, runs `prisma migrate deploy` on start), `worker`
-(BullMQ: contract sends, invoice generation, webhook processing, hourly reminder
-scan), `db`, `redis`, and `backup` (nightly `pg_dump` + storage tarball into
-`BACKUP_PATH`, pruned after `BACKUP_KEEP_DAYS`). Put `app` behind your existing
-reverse proxy on its own subdomain. It is published on `APP_BIND:APP_PORT`
-(default `127.0.0.1:3000`). A backup runs when the stack starts and then every 24 hours.
+### What's in the image
 
-The business profile now lives in the database, not a config file, so include
-`BACKUP_PATH` in your normal off-site backups.
+The HireStation image is a two-stage build (`node:22-bookworm` → `node:22-bookworm-slim`,
+runs as the non-root `node` user, ~185 MB compressed). It needs no `apt-get`: the OpenSSL
+libraries Prisma requires are copied from the build stage. `app` (API + SPA, runs
+`prisma migrate deploy` on start) and `worker` (BullMQ: contract sends, invoice generation,
+webhook processing, hourly reminder scan) share one image (`hirestation:latest`). The HireStation
+containers only receive their own settings, not the Docuseal / Invoice Ninja secrets in `.env`.
 
-### With a bundled Docuseal
-
-`docker-compose.docuseal.yml` adds Docuseal (plus its own Postgres) to the same stack.
-Invoice Ninja stays external (your existing instance).
-
-```sh
-# in .env (see the "Bundled Docuseal" block in .env.example)
-COMPOSE_FILE=docker-compose.yml:docker-compose.docuseal.yml
-DOCUSEAL_HOST=sign.example.com
-DOCUSEAL_DB_PASSWORD=<random>
-# DOCUSEAL_SMTP_* so Docuseal can email signing links (or set it in Docuseal's UI)
-
-docker compose up -d --build
-```
-
-Then, once:
-
-1. Point `sign.example.com` at `127.0.0.1:DOCUSEAL_PORT` (default 3001) in your reverse
-   proxy (examples in `deploy/`). Open it and create the Docuseal admin account.
-2. Docuseal → Settings → **API**: copy the token. In HireStation (wizard step 7 or
-   Settings → Docuseal) use URL **`http://docuseal:3000`** (internal network, no proxy
-   round trip) and that token, then **Test connection**. This also detects the Docuseal edition.
-3. Docuseal → Settings → **Webhooks**: add the **internal URL** shown under Settings →
-   Docuseal in HireStation (`http://app:3000/api/webhooks/docuseal/…`). The default events
-   are the right ones. Copy the webhook's **signing secret** (`whsec_…`) into HireStation's
-   "Webhook signing secret" field and save.
-
-Backups then also include Docuseal's database and its data volume. The data volume
-includes `docuseal.env`, the key that decrypts Docuseal's data, so keep backups safe.
-
-Restore Docuseal: `docker compose exec -T docuseal-db pg_restore -U docuseal -d docuseal --clean < backups/docuseal-db-….dump`,
-and untar `docuseal-data-….tar.gz` into the `docuseal-data` volume.
+Both presets were brought up from an empty state and checked:
+- all services come up healthy and HireStation forces setup
+- HireStation connects to the bundled Invoice Ninja and Docuseal over the internal network
+- backups of all three apps restore
 
 ## First-run wizard
 
@@ -313,30 +367,32 @@ TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/hirestation_test npm tes
 ⚠️ `TEST_DATABASE_URL` must point at a **test-only** database: the end-to-end suite drops
 and recreates its `public` schema. Without it, only the unit tests run.
 
-**2. Full stack with the bundled Docuseal**
+**2. Start a stack** (see *Deploy → Choose your stack*)
 
 ```sh
-cp .env.example .env
+cp .env.full.example .env     # or .env.no-invoiceninja.example to use your existing Invoice Ninja
 ```
 
-In `.env`:
-- set `SESSION_SECRET` (32+ chars), `POSTGRES_PASSWORD` and `PUBLIC_URL`
-- uncomment the Docuseal block: `COMPOSE_FILE`, `DOCUSEAL_HOST`, `DOCUSEAL_DB_PASSWORD`,
-  and the SMTP settings if you want signing emails
-- for plain-http testing on your own machine, also set `DOCUSEAL_FORCE_SSL=false`
+Fill in the values. For plain-http testing on your own machine (no reverse proxy):
+- `PUBLIC_URL=http://localhost:3000`
+- `DOCUSEAL_HOST=localhost:3001` and `DOCUSEAL_FORCE_SSL=false`
+- full stack only: `IN_URL=http://localhost:3002` and `IN_REQUIRE_HTTPS=false`
 
 ```sh
 docker compose up -d --build
 docker compose ps        # all services running; app, db and docuseal healthy
 ```
 
-**3. One-time setup** (details under *Deploy → With a bundled Docuseal*)
+**3. One-time setup** (details under *Deploy → First start*)
 
 - **Docuseal:** open `http://localhost:3001`, create the admin account, copy the API token
   from Settings → API.
+- **Invoice Ninja (full stack):** open `http://localhost:3002`, sign in with `IN_USER_EMAIL` /
+  `IN_PASSWORD`, create an API token (Settings → Account Management → API Tokens).
 - **HireStation:** open `http://localhost:3000` and complete the wizard.
   - Docuseal URL `http://docuseal:3000` and that token.
-  - Your existing Invoice Ninja URL and token, then pick the company.
+  - Invoice Ninja: `http://invoiceninja` (full stack) or your existing instance's URL, plus a
+    token, then pick the company.
 - **Webhooks:**
   - Docuseal → Settings → Webhooks: add the internal URL HireStation shows, then paste
     Docuseal's signing secret (`whsec_…`) back into HireStation.
