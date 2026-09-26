@@ -1,0 +1,161 @@
+// Full-flow test against a real Postgres (TEST_DATABASE_URL) with mock Invoice Ninja + Docuseal.
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createServer, Server } from 'node:http';
+import { execSync } from 'node:child_process';
+import type { FastifyInstance } from 'fastify';
+
+const TEST_DB = process.env.TEST_DATABASE_URL;
+const run = TEST_DB ? describe : describe.skip;
+
+const calls: { method: string; url: string; body: any }[] = [];
+let invoiceStatus = '1';
+function mockServer(): Promise<{ server: Server; url: string }> {
+  return new Promise((resolve) => {
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const body = raw ? JSON.parse(raw) : null;
+        calls.push({ method: req.method!, url: req.url!, body });
+        const send = (o: unknown) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(o)); };
+        const u = req.url!;
+        if (u.startsWith('/in/api/v1/companies')) return send({ data: [{ id: 'co1', settings: { name: 'Co One' } }, { id: 'co2', settings: { name: 'Co Two' } }] });
+        if (u.startsWith('/in/api/v1/clients?')) return send({ data: [] });
+        if (u === '/in/api/v1/clients') return send({ data: { id: 'inclient1' } });
+        if (u === '/in/api/v1/invoices' && req.method === 'POST') return send({ data: { id: 'inv1', number: '0001', status_id: '1', invitations: [{ link: 'http://x/inv' }] } });
+        if (u.startsWith('/in/api/v1/invoices/inv1')) return send({ data: { id: 'inv1', number: '0001', status_id: invoiceStatus, paid_to_date: invoiceStatus === '4' ? 1 : 0, invitations: [] } });
+        if (u.startsWith('/ds/api/templates')) return send({ data: [{ id: 7, name: 'DS Template' }] });
+        if (u === '/ds/api/submissions/html') return send({ id: 555, submitters: [{ id: 9, slug: 'abc', submission_id: 555 }] });
+        if (u.startsWith('/ds/api/submissions/555/documents')) return send({ documents: [{ name: 'signed', url: '/ds/file.pdf' }] });
+        if (u === '/ds/file.pdf') { res.setHeader('Content-Type', 'application/pdf'); return res.end('%PDF-1.4 fake'); }
+        res.statusCode = 404; send({ message: 'nope ' + u });
+      });
+    });
+    server.listen(0, () => resolve({ server, url: `http://127.0.0.1:${(server.address() as any).port}` }));
+  });
+}
+
+run('end-to-end', () => {
+  let app: FastifyInstance;
+  let mock: { server: Server; url: string };
+  let cookie = '';
+  const api = async (method: string, url: string, payload?: unknown) => {
+    const res = await app.inject({ method: method as any, url, payload: payload as any, headers: cookie ? { cookie } : {} });
+    const set = res.headers['set-cookie'];
+    if (set) cookie = (Array.isArray(set) ? set[0] : set).split(';')[0];
+    return { status: res.statusCode, body: res.headers['content-type']?.includes('json') ? res.json() : res.body };
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 300));
+
+  beforeAll(async () => {
+    process.env.DATABASE_URL = TEST_DB;
+    process.env.REDIS_URL = '';
+    process.env.STORAGE_PATH = '/tmp/nvhire-test-storage';
+    process.env.SESSION_SECRET ??= 'test-secret-test-secret-test-secret-123';
+    // Fresh schema on the dedicated test database only.
+    await prisma().$executeRawUnsafe('DROP SCHEMA IF EXISTS public CASCADE');
+    await prisma().$executeRawUnsafe('CREATE SCHEMA public');
+    execSync('npx prisma migrate deploy', { env: { ...process.env, DATABASE_URL: TEST_DB }, stdio: 'ignore' });
+    mock = await mockServer();
+    app = await (await import('../app.js')).buildApp();
+  });
+  afterAll(async () => { await app?.close(); mock?.server.close(); await _prisma?.$disconnect(); });
+
+  it('boots empty and forces setup', async () => {
+    expect((await api('GET', '/api/setup/status')).body).toEqual({ needsSetup: true, hasAdmin: false });
+    expect((await api('GET', '/api/equipment')).status).toBe(409);
+    expect((await api('GET', '/api/settings')).body.setupRequired).toBe(true);
+  });
+
+  it('runs the setup wizard', async () => {
+    expect((await api('POST', '/api/setup/admin', { name: 'Admin', email: 'a@example.com', password: 'longpassword1' })).status).toBe(200);
+    expect((await api('POST', '/api/setup/admin', { name: 'X', email: 'x@example.com', password: 'longpassword1' })).status).toBe(409);
+    const t = await api('POST', '/api/setup/test/invoice-ninja', { url: `${mock.url}/in`, token: 'tok' });
+    expect(t.body.companies).toHaveLength(2);
+    expect((await api('POST', '/api/setup/test/docuseal', { url: `${mock.url}/ds`, token: 'tok' })).body.templates[0].id).toBe(7);
+    const bad = await api('POST', '/api/setup/finish', { identity: { abn: '123' } });
+    expect(bad.status).toBe(400);
+    const res = await api('POST', '/api/setup/finish', {
+      identity: { legalName: 'Test Biz Pty Ltd', structure: 'COMPANY', abn: '51 824 753 556', acn: '000 000 019', addressLine1: '1 Test St', suburb: 'Testville', state: 'QLD', postcode: '4000', contactEmail: 'biz@example.com', contactPhone: '0400000000' },
+      tax: { gstRegistered: true, gstRate: 10 },
+      banking: { bankBsb: '123456', bankAccountNumber: '12345678', bankAccountName: 'Test Biz' },
+      branding: { primaryColour: '#112233' },
+      invoiceNinja: { invoiceNinjaUrl: `${mock.url}/in`, invoiceNinjaToken: 'tok', invoiceNinjaCompanyId: 'co2' },
+      docuseal: { docusealUrl: `${mock.url}/ds`, docusealToken: 'tok' },
+      locale: { timezone: 'Australia/Brisbane', currency: 'AUD', dateFormat: 'DD/MM/YYYY' },
+    });
+    expect(res.status).toBe(200);
+    const s = await api('GET', '/api/settings');
+    expect(s.body.bankBsb).toBe('123-456');
+    expect(s.body.invoiceNinjaToken).toBeUndefined();
+    expect(s.body.hasInvoiceNinjaToken).toBe(true);
+  });
+
+  let bookingId = '';
+  let speakerId = '';
+  it('books equipment with conflict detection', async () => {
+    speakerId = (await api('POST', '/api/equipment', { name: 'Speaker', dailyRate: 100, stockQuantity: 2 })).body.id;
+    const client = (await api('POST', '/api/clients', { type: 'BUSINESS', name: 'Client Co', email: 'c@example.com', abn: '51824753556' })).body;
+    const base = { title: 'Gig', clientId: client.id, loadIn: '2030-01-01T08:00:00Z', loadOut: '2030-01-02T08:00:00Z', bondAmount: 200, status: 'CONFIRMED' };
+    const b = await api('POST', '/api/bookings', { ...base, lineItems: [{ equipmentId: speakerId, qtyBooked: 2 }] });
+    expect(b.status).toBe(200);
+    bookingId = b.body.id;
+    expect(b.body.quote.subtotal).toBe(20000);
+    expect(b.body.quote.gstTotal).toBe(2000);
+    expect(b.body.bondStatus).toBe('HELD');
+    const b2 = await api('POST', '/api/bookings', { ...base, lineItems: [{ equipmentId: speakerId, qtyBooked: 1 }] });
+    expect(b2.body.conflicts[0].shortBy).toBe(1);
+  });
+
+  it('sends a contract through Docuseal and tracks the webhook', async () => {
+    const tpl = (await api('POST', '/api/templates', { name: 'Dry hire', content: '<p>{{client_name}} hires from {{business_name}} ABN {{business_abn}}</p>{{equipment_table}}' })).body;
+    await api('PUT', `/api/templates/${tpl.id}`, { name: 'Dry hire', content: '<p>v2 {{client_name}}</p>' });
+    expect((await api('GET', `/api/templates/${tpl.id}`)).body.versions).toHaveLength(2);
+    const c = (await api('POST', `/api/bookings/${bookingId}/contracts`, { templateId: tpl.id, send: true })).body;
+    expect(c.mergedContent).toContain('v2 Client Co');
+    await settle();
+    const htmlCall = calls.find((x) => x.url === '/ds/api/submissions/html');
+    expect(htmlCall?.body.submitters[0].email).toBe('c@example.com');
+    expect(htmlCall?.body.documents[0].html).toContain('signature-field');
+    const settings = await prisma().businessProfile.findUnique({ where: { id: 1 } });
+    await api('POST', `/api/webhooks/docuseal/${settings!.docusealWebhookKey}`, { event_type: 'form.completed', data: { id: 9, submission_id: 555 } });
+    await settle();
+    const b = (await api('GET', `/api/bookings/${bookingId}`)).body;
+    expect(b.status).toBe('CONTRACT_SIGNED');
+    expect(b.contracts[0].signedPdfPath).toBeTruthy();
+    expect((await api('POST', '/api/webhooks/docuseal/wrong-key', {})).status).toBe(404);
+  });
+
+  it('invoices from the return record and syncs payment', async () => {
+    const dep = (await api('GET', `/api/bookings/${bookingId}/departure`)).body;
+    expect((await api('PUT', `/api/bookings/${bookingId}/departure?complete=true`, { lines: dep.lines.map((l: any) => ({ equipmentId: l.equipmentId, qtyOut: 2 })) })).status).toBe(200);
+    const ret = await api('PUT', `/api/bookings/${bookingId}/return?complete=true`, { lateFee: 25, lines: [{ equipmentId: speakerId, qtyReturned: 1, condition: 'LOST', damageCharge: 300, damageNotes: 'missing' }] });
+    expect(ret.status).toBe(200);
+    await settle();
+    const inv = calls.find((x) => x.url === '/in/api/v1/invoices');
+    expect(inv?.body.client_id).toBe('inclient1');
+    expect(inv?.body.line_items.map((l: any) => l.cost)).toEqual([100, 300, 25]);
+    expect(inv?.body.line_items.every((l: any) => l.tax_rate1 === 10)).toBe(true);
+    let b = (await api('GET', `/api/bookings/${bookingId}`)).body;
+    expect(b.status).toBe('INVOICED');
+    expect(Number(b.invoices[0].total)).toBe(577.5);
+    invoiceStatus = '4';
+    const settings = await prisma().businessProfile.findUnique({ where: { id: 1 } });
+    await api('POST', `/api/webhooks/invoice-ninja/${settings!.invoiceNinjaWebhookKey}`, { id: 'inv1', entity_type: 'invoice' });
+    await settle();
+    b = (await api('GET', `/api/bookings/${bookingId}`)).body;
+    expect(b.status).toBe('PAID');
+  });
+
+  it('enforces read-only role', async () => {
+    await api('POST', '/api/users', { name: 'RO', email: 'ro@example.com', password: 'longpassword1', role: 'READ_ONLY' });
+    cookie = '';
+    await api('POST', '/api/auth/login', { email: 'ro@example.com', password: 'longpassword1' });
+    expect((await api('GET', '/api/equipment')).status).toBe(200);
+    expect((await api('POST', '/api/equipment', { name: 'x', dailyRate: 1 })).status).toBe(403);
+  });
+});
+
+import { PrismaClient } from "@prisma/client";
+let _prisma: PrismaClient | undefined;
+function prisma() { return (_prisma ??= new PrismaClient({ datasourceUrl: TEST_DB })); }

@@ -1,0 +1,35 @@
+{
+  "name": "@nv-hire/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "worker": "tsx src/jobs/worker.ts",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "start:worker": "node dist/jobs/worker.js",
+    "migrate": "prisma migrate deploy",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:e2e": "TEST_DATABASE_URL=${TEST_DATABASE_URL:?set TEST_DATABASE_URL} vitest run"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/multipart": "^10.1.2",
+    "@fastify/static": "^10.1.4",
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^6.3.9",
+    "fastify": "^5.12.5",
+    "ioredis": "^6.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^26.6.3",
+    "prisma": "^6.19.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}

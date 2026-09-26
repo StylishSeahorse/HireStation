@@ -1,0 +1,19 @@
+// Infrastructure-only configuration. Business data never lives here.
+function required(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing required environment variable ${name}`);
+  return v;
+}
+
+export const env = {
+  databaseUrl: required('DATABASE_URL'),
+  sessionSecret: required('SESSION_SECRET'),
+  redisUrl: process.env.REDIS_URL ?? '',
+  storagePath: process.env.STORAGE_PATH ?? './storage',
+  port: Number(process.env.PORT ?? 3000),
+  publicUrl: process.env.PUBLIC_URL ?? '',
+  webDist: process.env.WEB_DIST ?? '',
+  production: process.env.NODE_ENV === 'production',
+};
+
+if (env.sessionSecret.length < 32) throw new Error('SESSION_SECRET must be at least 32 characters');

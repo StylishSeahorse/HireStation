@@ -1,0 +1,421 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Singleton business profile. Created ONLY by the setup wizard; never seeded.
+// `id` is fixed to 1 so there can only ever be one row.
+// ---------------------------------------------------------------------------
+enum BusinessStructure {
+  SOLE_TRADER
+  PARTNERSHIP
+  COMPANY
+  TRUST
+}
+
+model BusinessProfile {
+  id                     Int               @id @default(1)
+  // Identity
+  legalName              String
+  tradingName            String?
+  structure              BusinessStructure
+  abn                    String
+  acn                    String?
+  addressLine1           String
+  addressLine2           String?
+  suburb                 String
+  state                  String
+  postcode               String
+  contactEmail           String
+  contactPhone           String
+  abrGuid                String?
+  signatoryName          String?
+  signatoryTitle         String?
+  // Tax
+  gstRegistered          Boolean
+  gstRate                Decimal           @db.Decimal(5, 2)
+  // Banking
+  bankBsb                String
+  bankAccountNumber      String
+  bankAccountName        String
+  // Branding
+  logoPath               String?
+  primaryColour          String?
+  accentColour           String?
+  documentFooter         String?
+  // Locale
+  timezone               String
+  currency               String
+  dateFormat             String
+  holidayRegion          String?
+  // Invoice Ninja
+  invoiceNinjaUrl        String?
+  invoiceNinjaToken      String?
+  invoiceNinjaCompanyId  String?
+  invoiceNinjaWebhookKey String?
+  // Docuseal
+  docusealUrl            String?
+  docusealToken          String?
+  docusealWebhookKey     String?
+  // Operational defaults
+  contractReminderDays   Int               @default(3)
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+}
+
+enum Role {
+  ADMIN
+  STAFF
+  READ_ONLY
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(STAFF)
+  active       Boolean  @default(true)
+  staff        Staff?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Inventory
+// ---------------------------------------------------------------------------
+model Category {
+  id        String      @id @default(cuid())
+  name      String
+  parentId  String?
+  parent    Category?   @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[]  @relation("CategoryTree")
+  equipment Equipment[]
+}
+
+model Equipment {
+  id                    String            @id @default(cuid())
+  name                  String
+  sku                   String?           @unique
+  description           String?
+  categoryId            String?
+  category              Category?         @relation(fields: [categoryId], references: [id])
+  tags                  String[]
+  photos                String[]
+  dailyRate             Decimal           @db.Decimal(10, 2)
+  replacementValue      Decimal?          @db.Decimal(10, 2)
+  gstTaxable            Boolean           @default(true)
+  stockQuantity         Int               @default(0)
+  serialised            Boolean           @default(false)
+  invoiceNinjaProductId String?
+  archived              Boolean           @default(false)
+  units                 EquipmentUnit[]
+  lineItems             BookingLineItem[]
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+}
+
+model EquipmentUnit {
+  id             String    @id @default(cuid())
+  equipmentId    String
+  equipment      Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  serialNumber   String
+  condition      String    @default("GOOD")
+  conditionNotes String?
+  retired        Boolean   @default(false)
+
+  @@unique([equipmentId, serialNumber])
+}
+
+// ---------------------------------------------------------------------------
+// Clients & staff
+// ---------------------------------------------------------------------------
+enum ClientType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+model Client {
+  id                   String     @id @default(cuid())
+  type                 ClientType @default(INDIVIDUAL)
+  name                 String
+  contactName          String?
+  email                String?
+  phone                String?
+  abn                  String?
+  address              String?
+  notes                String?
+  invoiceNinjaClientId String?
+  bookings             Booking[]
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+}
+
+model Staff {
+  id          String         @id @default(cuid())
+  name        String
+  email       String?
+  phone       String?
+  skills      String[]
+  userId      String?        @unique
+  user        User?          @relation(fields: [userId], references: [id])
+  active      Boolean        @default(true)
+  assignments BookingStaff[]
+}
+
+// ---------------------------------------------------------------------------
+// Bookings
+// ---------------------------------------------------------------------------
+enum BookingStatus {
+  ENQUIRY
+  QUOTED
+  CONFIRMED
+  CONTRACT_SENT
+  CONTRACT_VIEWED
+  CONTRACT_SIGNED
+  CONTRACT_DECLINED
+  INVOICED
+  PAID
+  COMPLETED
+  CANCELLED
+}
+
+enum BondStatus {
+  NONE
+  HELD
+  REFUNDED
+  PARTIALLY_FORFEITED
+  FULLY_FORFEITED
+}
+
+model Booking {
+  id               String              @id @default(cuid())
+  reference        String              @unique
+  title            String
+  clientId         String
+  client           Client              @relation(fields: [clientId], references: [id])
+  venue            String?
+  venueAddress     String?
+  loadIn           DateTime
+  eventStart       DateTime?
+  eventEnd         DateTime?
+  loadOut          DateTime
+  status           BookingStatus       @default(ENQUIRY)
+  notes            String?
+  discountPercent  Decimal             @default(0) @db.Decimal(5, 2)
+  bondAmount       Decimal             @default(0) @db.Decimal(10, 2)
+  bondStatus       BondStatus          @default(NONE)
+  bondForfeited    Decimal             @default(0) @db.Decimal(10, 2)
+  bondRefundedAt   DateTime?
+  bondNotes        String?
+  lineItems        BookingLineItem[]
+  staff            BookingStaff[]
+  departure        DepartureInventory?
+  returnInventory  ReturnInventory?
+  contracts        Contract[]
+  invoices         Invoice[]
+  duplicatedFromId String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([loadIn, loadOut])
+}
+
+model BookingLineItem {
+  id          String    @id @default(cuid())
+  bookingId   String
+  booking     Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+  qtyBooked   Int
+  // Rate snapshot at booking time so catalog edits don't alter quotes.
+  dailyRate   Decimal   @db.Decimal(10, 2)
+  days        Decimal   @db.Decimal(6, 2)
+}
+
+model BookingStaff {
+  id        String   @id @default(cuid())
+  bookingId String
+  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id])
+  role      String
+  rate      Decimal? @db.Decimal(10, 2)
+  hours     Decimal? @db.Decimal(6, 2)
+
+  @@unique([bookingId, staffId])
+}
+
+// ---------------------------------------------------------------------------
+// Departure / return — the source of truth for invoicing.
+// ---------------------------------------------------------------------------
+model DepartureInventory {
+  id          String          @id @default(cuid())
+  bookingId   String          @unique
+  booking     Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  completed   Boolean         @default(false)
+  completedAt DateTime?
+  completedBy String?
+  notes       String?
+  lines       DepartureLine[]
+}
+
+model DepartureLine {
+  id          String             @id @default(cuid())
+  departureId String
+  departure   DepartureInventory @relation(fields: [departureId], references: [id], onDelete: Cascade)
+  equipmentId String
+  qtyOut      Int
+  unitIds     String[]
+  dailyRate   Decimal            @db.Decimal(10, 2)
+  days        Decimal            @db.Decimal(6, 2)
+}
+
+model ReturnInventory {
+  id          String       @id @default(cuid())
+  bookingId   String       @unique
+  booking     Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  completed   Boolean      @default(false)
+  completedAt DateTime?
+  completedBy String?
+  returnedAt  DateTime?
+  lateReturn  Boolean      @default(false)
+  lateFee     Decimal      @default(0) @db.Decimal(10, 2)
+  notes       String?
+  lines       ReturnLine[]
+}
+
+model ReturnLine {
+  id           String          @id @default(cuid())
+  returnId     String
+  ret          ReturnInventory @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  equipmentId  String
+  qtyOut       Int
+  qtyReturned  Int
+  condition    String          @default("GOOD")
+  damageNotes  String?
+  damageCharge Decimal         @default(0) @db.Decimal(10, 2)
+  dailyRate    Decimal         @db.Decimal(10, 2)
+  days         Decimal         @db.Decimal(6, 2)
+}
+
+// ---------------------------------------------------------------------------
+// Contracts
+// ---------------------------------------------------------------------------
+model Clause {
+  id        String   @id @default(cuid())
+  title     String
+  category  String?
+  content   String // TipTap/HTML content
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ContractTemplate {
+  id                 String                    @id @default(cuid())
+  name               String
+  description        String?
+  archived           Boolean                   @default(false)
+  docusealTemplateId String?
+  versions           ContractTemplateVersion[]
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+}
+
+// Immutable once created; editing a template creates a new version, so
+// contracts that reference an older version are never retroactively changed.
+model ContractTemplateVersion {
+  id         String           @id @default(cuid())
+  templateId String
+  template   ContractTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  version    Int
+  content    String
+  createdAt  DateTime         @default(now())
+  contracts  Contract[]
+
+  @@unique([templateId, version])
+}
+
+enum ContractStatus {
+  DRAFT
+  SENT
+  VIEWED
+  SIGNED
+  DECLINED
+  VOID
+}
+
+model Contract {
+  id                    String                  @id @default(cuid())
+  bookingId             String
+  booking               Booking                 @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  templateVersionId     String
+  templateVersion       ContractTemplateVersion @relation(fields: [templateVersionId], references: [id])
+  mergedContent         String
+  pdfPath               String?
+  docusealSubmissionId  String?
+  docusealSubmitterSlug String?
+  status                ContractStatus          @default(DRAFT)
+  signedPdfPath         String?
+  sentAt                DateTime?
+  viewedAt              DateTime?
+  signedAt              DateTime?
+  lastReminderAt        DateTime?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Invoices (mirror of Invoice Ninja records)
+// ---------------------------------------------------------------------------
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIAL
+  PAID
+  CANCELLED
+  CREDIT
+}
+
+model Invoice {
+  id                    String        @id @default(cuid())
+  bookingId             String
+  booking               Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  invoiceNinjaInvoiceId String?
+  number                String?
+  kind                  String        @default("INVOICE") // INVOICE | CREDIT | ADJUSTMENT
+  status                InvoiceStatus @default(DRAFT)
+  subtotal              Decimal       @db.Decimal(10, 2)
+  gstTotal              Decimal       @db.Decimal(10, 2)
+  total                 Decimal       @db.Decimal(10, 2)
+  amountPaid            Decimal       @default(0) @db.Decimal(10, 2)
+  hostedUrl             String?
+  pdfUrl                String?
+  payload               Json?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  kind      String
+  message   String
+  bookingId String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model WebhookEvent {
+  id         String   @id @default(cuid())
+  source     String
+  event      String
+  payload    Json
+  processed  Boolean  @default(false)
+  error      String?
+  receivedAt DateTime @default(now())
+}
