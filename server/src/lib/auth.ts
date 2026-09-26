@@ -6,7 +6,7 @@ export const SESSION_COOKIE = 'hs_session';
 const MAX_AGE_S = 60 * 60 * 24 * 14;
 
 declare module 'fastify' {
-  interface FastifyRequest { user: User | null }
+  interface FastifyRequest { user: User | null; rawBody?: string }
 }
 
 export function startSession(reply: FastifyReply, user: { id: string; sessionVersion: number }) {

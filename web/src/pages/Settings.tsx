@@ -21,7 +21,7 @@ const FIELDS: Record<string, string[]> = {
   banking: ['bankBsb', 'bankAccountNumber', 'bankAccountName'],
   branding: ['primaryColour', 'accentColour', 'documentFooter'],
   invoiceNinja: ['invoiceNinjaUrl', 'invoiceNinjaCompanyId'],
-  docuseal: ['docusealUrl'],
+  docuseal: ['docusealUrl', 'docusealEdition'],
   locale: ['timezone', 'currency', 'dateFormat', 'holidayRegion', 'contractReminderDays'],
 };
 
@@ -69,7 +69,7 @@ function Section({ name }: { name: string }) {
         {name === 'banking' && <BankingForm {...props} />}
         {name === 'branding' && <BrandingForm {...props} logoUrl={s.logoUrl} onLogo={logo} onRemoveLogo={removeLogo} />}
         {name === 'invoiceNinja' && <InvoiceNinjaForm {...props} hasToken={s.hasInvoiceNinjaToken} />}
-        {name === 'docuseal' && <DocusealForm {...props} hasToken={s.hasDocusealToken} />}
+        {name === 'docuseal' && <DocusealForm {...props} hasToken={s.hasDocusealToken} hasHmacSecret={s.hasDocusealWebhookHmacSecret} />}
         {name === 'locale' && <LocaleForm {...props} />}
         <div className="mt-4 flex items-center gap-3 border-t pt-4">
           <Button onClick={() => save.mutate(undefined)} loading={save.isPending}>Save</Button>
@@ -95,15 +95,19 @@ function Webhooks({ which }: { which: 'invoiceNinja' | 'docuseal' }) {
   const rotateSecret = useMutate(() => api('/settings/webhook-secret', { method: 'POST' }), [['settings']]);
   const [showSecret, setShowSecret] = useState(false);
   const url = s?.webhookUrls?.[which];
+  const internalUrl = s?.webhookUrls?.internal?.[which];
   return (
     <Card title="Webhook (status sync)">
       <p className="mb-2 text-sm text-slate-500">
         {which === 'docuseal'
-          ? 'In Docuseal → Settings → Webhooks, add this URL, enable form.viewed, form.completed and form.declined, and add the secret below as a custom header.'
+          ? 'In Docuseal → Settings → Webhooks, add this URL and enable form.viewed, form.completed and form.declined. Then either paste Docuseal’s signing secret into the form above (recommended — signatures are verified), or add the header below as a custom secret.'
           : 'Invoice Ninja calls this URL when invoices change or payments arrive, so booking statuses update without polling. “Register webhooks” sets the URL and secret header for you.'}
       </p>
       <div className="space-y-2 text-xs">
         <div><span className="text-slate-500">URL</span><code className="block break-all rounded bg-slate-100 p-2">{url ?? '—'}</code></div>
+        {internalUrl && which === 'docuseal' && (
+          <div><span className="text-slate-500">Internal URL (Docuseal running in this compose stack; no reverse-proxy round trip)</span><code className="block break-all rounded bg-slate-100 p-2">{internalUrl}</code></div>
+        )}
         <div>
           <span className="text-slate-500">Required header</span>
           <code className="block break-all rounded bg-slate-100 p-2">{s?.webhookSecretHeader}: {showSecret ? s?.webhookSecret : '••••••••••••••••'}</code>

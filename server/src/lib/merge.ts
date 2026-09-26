@@ -22,6 +22,7 @@ export const MERGE_FIELDS: { key: string; label: string; group: 'Client' | 'Even
   { key: 'venue', label: 'Venue', group: 'Event' },
   { key: 'venue_address', label: 'Venue address', group: 'Event' },
   { key: 'equipment_table', label: 'Equipment table', group: 'Pricing' },
+  { key: 'equipment_list', label: 'Equipment list (plain text, for Docuseal fields)', group: 'Pricing' },
   { key: 'staff_list', label: 'Staff / crew list', group: 'Pricing' },
   { key: 'subtotal', label: 'Subtotal (ex GST)', group: 'Pricing' },
   { key: 'gst_amount', label: 'GST amount', group: 'Pricing' },
@@ -79,6 +80,8 @@ export function mergeValues(b: MergeBooking, totals: Totals, p: BusinessProfile)
     gst_rate: p.gstRegistered ? `${Number(p.gstRate)}%` : 'Not registered for GST',
     signatory_name: p.signatoryName ?? '', signatory_title: p.signatoryTitle ?? '',
     today: d(new Date()), client_signed_date: '',
+    // Plain-text lines for Docuseal free-edition templates, where fields can't hold HTML tables.
+    equipment_list: totals.lines.map((l) => `${l.quantity} × ${l.description}${l.kind === 'HIRE' ? ` (${l.days} day${l.days === 1 ? '' : 's'})` : ''} — ${money(l.lineTotal, cur)}`).join('\n'),
   };
   const rows = totals.lines.map((l) => `<tr><td>${esc(l.description)}</td><td class="num">${l.quantity}</td><td class="num">${l.kind === 'HIRE' ? l.days : ''}</td><td class="num">${money(l.unitCost, cur)}</td><td class="num">${money(l.lineTotal, cur)}</td></tr>`).join('');
   const gstRow = p.gstRegistered ? `<tr><td colspan="4" class="num">GST (${Number(p.gstRate)}%)</td><td class="num">${money(totals.gstTotal, cur)}</td></tr>` : '';
@@ -95,7 +98,7 @@ export function mergeValues(b: MergeBooking, totals: Totals, p: BusinessProfile)
 export function mergeTemplate(content: string, values: { text: Record<string, string>; html: Record<string, string> }) {
   return content.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (m, key: string) => {
     if (key in values.html) return values.html[key];
-    if (key in values.text) return esc(values.text[key]);
+    if (key in values.text) return esc(values.text[key]).replace(/\n/g, '<br>');
     return m;
   });
 }

@@ -56,6 +56,9 @@ export const invoiceNinjaSchema = z.object({
 export const docusealSchema = z.object({
   docusealUrl: url,
   docusealToken: z.string().optional(),
+  // Docuseal → Settings → Webhooks → signing secret (whsec_…). Blank = keep existing.
+  docusealWebhookHmacSecret: z.string().trim().optional().refine((v) => !v || v.startsWith('whsec_'), 'Docuseal signing secrets start with whsec_'),
+  docusealEdition: z.enum(['pro', 'free']).optional(),
 });
 
 export const localeSchema = z.object({

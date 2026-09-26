@@ -40,6 +40,15 @@ export async function buildApp(): Promise<FastifyInstance> {
   if (!env.redisUrl) for (const [name, fn] of Object.entries(handlers)) registerInline(name as JobName, fn);
 
   app.decorateRequest('user', null);
+  app.decorateRequest('rawBody', undefined);
+
+  // Keep the exact request body so webhook signatures (HMAC over the raw bytes) can be verified.
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    const text = body as string;
+    req.rawBody = text;
+    if (!text) return done(null, undefined);
+    try { done(null, JSON.parse(text)); } catch { done(new HttpError(400, 'Invalid JSON body'), undefined); }
+  });
 
   const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
   // POST endpoints that only compute/preview and change nothing: not worth an audit entry.

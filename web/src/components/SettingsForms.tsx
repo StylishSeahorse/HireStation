@@ -146,15 +146,15 @@ export function InvoiceNinjaForm(p: FormProps & { hasToken?: boolean }) {
   );
 }
 
-export function DocusealForm(p: FormProps & { hasToken?: boolean }) {
+export function DocusealForm(p: FormProps & { hasToken?: boolean; hasHmacSecret?: boolean }) {
   const v = p.value;
-  const [state, setState] = useState<{ busy?: boolean; error?: string; templates?: { id: number; name: string }[] }>({});
+  const [state, setState] = useState<{ busy?: boolean; error?: string; templates?: { id: number; name: string }[]; edition?: string }>({});
   const test = async () => {
     setState({ busy: true });
     try {
       const r = await api('/setup/test/docuseal', { body: { url: v.docusealUrl, token: v.docusealToken || undefined } });
-      p.onChange({ ...v, _tested: true });
-      setState({ templates: r.templates });
+      p.onChange({ ...v, docusealEdition: r.edition, _tested: true });
+      setState({ templates: r.templates, edition: r.edition });
     } catch (e) { setState({ error: errorText(e) }); p.onChange({ ...v, _tested: false }); }
   };
   return (
@@ -167,7 +167,21 @@ export function DocusealForm(p: FormProps & { hasToken?: boolean }) {
       </div>
       <Button type="button" variant="secondary" onClick={test} loading={state.busy} disabled={!v.docusealUrl || (!v.docusealToken && !p.hasToken)}>Test connection</Button>
       {state.error && <Alert>{state.error}</Alert>}
-      {state.templates && <Alert tone="green">Connected — {state.templates.length} Docuseal template(s) found. Map them to contract templates under Contracts → Templates (optional; by default contracts are sent as this app’s own branded document).</Alert>}
+      {state.templates && <Alert tone="green">Connected — {state.templates.length} Docuseal template(s) found.</Alert>}
+      {(state.edition ?? v.docusealEdition) === 'free' && (
+        <Alert tone="amber">
+          <strong>Docuseal free edition detected.</strong> It can only send templates built in Docuseal, so each contract template here must be
+          mapped to a Docuseal template (Contracts → template → “Docuseal template”). In Docuseal, name the template’s text fields after merge fields
+          (e.g. <code>client_name</code>, <code>event_date_range</code>, <code>total_hire_cost</code>, <code>bond_amount</code>, <code>equipment_list</code>) and they’ll be
+          prefilled and locked for each booking. Docuseal Pro removes this restriction: contracts are then sent as this app’s own branded document.
+        </Alert>
+      )}
+      {(state.edition ?? v.docusealEdition) === 'pro' && <Alert tone="green">Docuseal Pro detected — contracts can be sent as this app’s own branded document, or via a mapped Docuseal template.</Alert>}
+      {p.existing && (
+        <Field label="Webhook signing secret (optional)" hint={<>Docuseal → Settings → Webhooks → your webhook → signing secret (starts with <code>whsec_</code>). When set, Docuseal’s signed webhooks are verified cryptographically and the custom header is not needed.{p.hasHmacSecret ? ' A secret is saved — leave blank to keep it.' : ''}</>}>
+          <Input type="password" autoComplete="off" value={v.docusealWebhookHmacSecret ?? ''} onChange={set(p, 'docusealWebhookHmacSecret')} placeholder={p.hasHmacSecret ? '•••••••• (saved)' : 'whsec_…'} />
+        </Field>
+      )}
     </div>
   );
 }

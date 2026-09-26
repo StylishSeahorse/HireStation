@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../lib/db.js';
 import { HttpError, requireRole } from '../lib/auth.js';
@@ -15,15 +15,41 @@ function safeEqual(expected: string | null | undefined, given: string | undefine
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+const SIGNATURE_TOLERANCE_S = 5 * 60;
+
 /**
- * Neither Invoice Ninja nor Docuseal sign their webhooks, so two shared secrets are required:
- * an unguessable key in the URL path and a secret header configured on the sending side.
+ * Docuseal's X-Docuseal-Signature: "<unix ts>.<hex HMAC-SHA256(secret, `${ts}.${rawBody}`)>".
+ * Rejects signatures more than 5 minutes old (replay protection), matching Docuseal's own verifier.
+ */
+export function verifyDocusealSignature(secret: string, rawBody: string, header: string | undefined, now = Date.now()): boolean {
+  const [tsText, sig] = (header ?? '').split('.', 2);
+  const ts = Number(tsText);
+  if (!Number.isInteger(ts) || !sig) return false;
+  if (Math.abs(now / 1000 - ts) > SIGNATURE_TOLERANCE_S) return false;
+  const expected = createHmac('sha256', secret).update(`${ts}.${rawBody}`).digest('hex');
+  return safeEqual(expected, sig);
+}
+
+const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h);
+
+/**
+ * Every webhook needs the unguessable key in its URL, plus proof it came from the integration:
+ * - Invoice Ninja (unsigned): the shared X-Webhook-Secret header.
+ * - Docuseal: a valid HMAC X-Docuseal-Signature (when its signing secret is saved in Settings),
+ *   or the shared X-Webhook-Secret header.
  */
 async function verify(req: FastifyRequest<{ Params: { key: string } }>, which: 'invoiceNinjaWebhookKey' | 'docusealWebhookKey') {
-  const p = await prisma.businessProfile.findUnique({ where: { id: 1 }, select: { [which]: true, webhookSecret: true } }) as Record<string, string | null> | null;
-  const header = req.headers[WEBHOOK_SECRET_HEADER];
-  if (!safeEqual(p?.[which], req.params.key) || !safeEqual(p?.webhookSecret, Array.isArray(header) ? header[0] : header)) {
-    await audit(req, 'webhook.rejected', { user: null, detail: { source: which.replace('WebhookKey', ''), hasHeader: !!header } });
+  const p = await prisma.businessProfile.findUnique({
+    where: { id: 1 }, select: { invoiceNinjaWebhookKey: true, docusealWebhookKey: true, webhookSecret: true, docusealWebhookHmacSecret: true },
+  });
+  const header = first(req.headers[WEBHOOK_SECRET_HEADER]);
+  const signature = first(req.headers['x-docuseal-signature']);
+  const keyOk = safeEqual(p?.[which], req.params.key);
+  const headerOk = safeEqual(p?.webhookSecret, header);
+  const hmacOk = which === 'docusealWebhookKey' && !!p?.docusealWebhookHmacSecret &&
+    verifyDocusealSignature(p.docusealWebhookHmacSecret, req.rawBody ?? '', signature);
+  if (!keyOk || !(headerOk || hmacOk)) {
+    await audit(req, 'webhook.rejected', { user: null, detail: { source: which.replace('WebhookKey', ''), keyOk, hasHeader: !!header, hasSignature: !!signature } });
     throw new HttpError(404, 'Not found');
   }
 }

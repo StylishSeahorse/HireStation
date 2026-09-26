@@ -19,11 +19,15 @@ async function ensureWebhookSecret(p: BusinessProfile) {
 }
 
 export function webhookUrls(p: { invoiceNinjaWebhookKey: string | null; docusealWebhookKey: string | null }) {
-  const base = env.publicUrl.replace(/\/+$/, '');
-  return {
-    invoiceNinja: p.invoiceNinjaWebhookKey ? `${base}/api/webhooks/invoice-ninja/${p.invoiceNinjaWebhookKey}` : null,
-    docuseal: p.docusealWebhookKey ? `${base}/api/webhooks/docuseal/${p.docusealWebhookKey}` : null,
+  const at = (baseUrl: string) => {
+    const base = baseUrl.replace(/\/+$/, '');
+    return {
+      invoiceNinja: p.invoiceNinjaWebhookKey ? `${base}/api/webhooks/invoice-ninja/${p.invoiceNinjaWebhookKey}` : null,
+      docuseal: p.docusealWebhookKey ? `${base}/api/webhooks/docuseal/${p.docusealWebhookKey}` : null,
+    };
   };
+  // `internal` is reachable from containers on the same Docker network (e.g. bundled Docuseal).
+  return { ...at(env.publicUrl), internal: env.internalUrl ? at(env.internalUrl) : null };
 }
 
 export async function settingsRoutes(app: FastifyInstance) {
@@ -46,7 +50,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (!(name in sections)) throw new HttpError(404, 'Unknown settings section');
     const data: Record<string, unknown> = sections[name].parse(req.body);
     // Blank secret fields mean "keep the stored value".
-    for (const k of ['invoiceNinjaToken', 'docusealToken', 'abrGuid']) if (k in data && !data[k]) delete data[k];
+    for (const k of ['invoiceNinjaToken', 'docusealToken', 'abrGuid', 'docusealWebhookHmacSecret']) if (k in data && !data[k]) delete data[k];
     const updated = await prisma.businessProfile.update({ where: { id: 1 }, data });
     return publicProfile(updated);
   });

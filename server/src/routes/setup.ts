@@ -86,8 +86,12 @@ export async function setupRoutes(app: FastifyInstance) {
     const body = z.object({ url: z.url(), token: z.string().optional() }).parse(req.body);
     const token = body.token || (await getProfile())?.docusealToken;
     if (!token) throw new HttpError(400, 'API token is required');
-    const templates = await new Docuseal({ url: body.url, token }).listTemplates();
-    return { ok: true, templates };
+    const ds = new Docuseal({ url: body.url, token });
+    const templates = await ds.listTemplates();
+    const edition = await ds.detectEdition();
+    // Remember the edition when testing the saved connection from Settings.
+    if (await getProfile()) await prisma.businessProfile.update({ where: { id: 1 }, data: { docusealEdition: edition } });
+    return { ok: true, templates, edition };
   });
 
   // Logo is uploaded ahead of "Finish" and referenced by path in the finish payload.
@@ -111,6 +115,7 @@ export async function setupRoutes(app: FastifyInstance) {
       invoiceNinjaCompanyId: body.invoiceNinja?.invoiceNinjaCompanyId ?? null,
       docusealUrl: body.docuseal?.docusealUrl ?? null,
       docusealToken: body.docuseal?.docusealToken ?? null,
+      docusealEdition: body.docuseal?.docusealEdition ?? null,
       invoiceNinjaWebhookKey: newWebhookKey(),
       docusealWebhookKey: newWebhookKey(),
       webhookSecret: newWebhookKey(),

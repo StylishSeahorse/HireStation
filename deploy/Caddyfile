@@ -10,3 +10,12 @@ hire.example.com {
 
 	reverse_proxy 127.0.0.1:3000
 }
+
+# Bundled Docuseal (docker-compose.docuseal.yml). Must match DOCUSEAL_HOST.
+sign.example.com {
+	encode zstd gzip
+	request_body {
+		max_size 50MB
+	}
+	reverse_proxy 127.0.0.1:3001
+}

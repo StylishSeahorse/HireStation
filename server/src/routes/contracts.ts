@@ -4,7 +4,7 @@ import { prisma } from '../lib/db.js';
 import { HttpError, requireRole } from '../lib/auth.js';
 import { MERGE_FIELDS } from '../lib/merge.js';
 import { bookingInclude } from '../lib/bookings.js';
-import { contractHtml, createContract, renderPreview } from '../services/contracts.js';
+import { assertSendable, contractHtml, createContract, renderPreview } from '../services/contracts.js';
 import { docusealClient } from '../lib/profile.js';
 import { enqueue } from '../jobs/queue.js';
 import { fileExists, openFile } from '../lib/storage.js';
@@ -86,6 +86,12 @@ export async function contractRoutes(app: FastifyInstance) {
     const { templateId, send } = z.object({ templateId: z.string(), send: z.boolean().default(false) }).parse(req.body);
     const b = await prisma.booking.findUnique({ where: { id: req.params.id }, include: bookingInclude });
     if (!b) throw new HttpError(404, 'Booking not found');
+    if (send) {
+      // Fail in the request (not later in the worker) when this template can't be sent.
+      const { profile } = await docusealClient();
+      const t = await prisma.contractTemplate.findUnique({ where: { id: templateId } });
+      assertSendable(profile, t?.docusealTemplateId ?? null);
+    }
     const c = await createContract(b, templateId);
     if (send) await enqueue('contract.send', { contractId: c.id }, { jobId: `contract-send-${c.id}` });
     return c;
@@ -97,10 +103,11 @@ export async function contractRoutes(app: FastifyInstance) {
   });
 
   app.post<{ Params: { id: string } }>('/api/contracts/:id/send', async (req) => {
-    const c = await prisma.contract.findUnique({ where: { id: req.params.id } });
+    const c = await prisma.contract.findUnique({ where: { id: req.params.id }, include: { templateVersion: { include: { template: true } } } });
     if (!c) throw new HttpError(404, 'Contract not found');
     if (c.status !== 'DRAFT') throw new HttpError(409, 'Contract has already been sent');
-    await docusealClient(); // fail fast if not configured
+    const { profile } = await docusealClient(); // fail fast if not configured
+    assertSendable(profile, c.templateVersion.template.docusealTemplateId);
     await enqueue('contract.send', { contractId: c.id }, { jobId: `contract-send-${c.id}` });
     return { queued: true };
   });

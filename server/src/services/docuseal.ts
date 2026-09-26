@@ -25,7 +25,22 @@ export class Docuseal {
     return list.map((t) => ({ id: t.id, name: t.name }));
   }
 
-  /** Send merged HTML contract content for signing. Docuseal emails the signer. */
+  /**
+   * Pro vs free edition. The free edition doesn't route /api/submissions/html at all and answers
+   * with a "Pro Edition" 404; Pro rejects this empty body as invalid. Nothing is created either way.
+   */
+  async detectEdition(): Promise<'pro' | 'free'> {
+    try {
+      await this.req('POST', '/submissions/html', {});
+      return 'pro';
+    } catch (e) {
+      if (e instanceof IntegrationError && isProOnlyError(e)) return 'free';
+      if (e instanceof IntegrationError && e.status && e.status >= 400 && e.status < 500) return 'pro';
+      throw e;
+    }
+  }
+
+  /** Send merged HTML contract content for signing (Pro edition). Docuseal emails the signer. */
   async submitHtml(opts: { name: string; html: string; signer: { name: string; email: string }; message?: { subject: string; body: string } }): Promise<{ submissionId: number; slug?: string }> {
     const res = await this.req<unknown>('POST', '/submissions/html', {
       name: opts.name,
@@ -38,11 +53,14 @@ export class Docuseal {
   }
 
   /** Create a submission from a pre-built Docuseal template, prefilling fields named after merge keys. */
-  async submitTemplate(opts: { templateId: number; signer: { name: string; email: string }; values: Record<string, string> }): Promise<{ submissionId: number; slug?: string }> {
+  async submitTemplate(opts: { templateId: number; signer: { name: string; email: string }; values: Record<string, string>; message?: { subject: string; body: string } }): Promise<{ submissionId: number; slug?: string }> {
+    // Only the first (client) role is filled; prefilled values are locked so the signer can't alter
+    // prices or terms. Values for names the template doesn't have are ignored by Docuseal.
     const res = await this.req<unknown>('POST', '/submissions', {
       template_id: opts.templateId,
       send_email: true,
-      submitters: [{ role: 'Client', name: opts.signer.name, email: opts.signer.email, values: opts.values }],
+      ...(opts.message ? { message: opts.message } : {}),
+      submitters: [{ name: opts.signer.name, email: opts.signer.email, values: opts.values, readonly_fields: Object.keys(opts.values) }],
     });
     return parseSubmission(res);
   }
@@ -55,6 +73,10 @@ export class Docuseal {
   async remind(submitterId: number | string): Promise<void> {
     await this.req('PUT', `/submitters/${submitterId}`, { send_email: true });
   }
+}
+
+export function isProOnlyError(e: IntegrationError) {
+  return e.status === 404 && /Pro Edition/i.test(e.message + JSON.stringify(e.body ?? ''));
 }
 
 function parseSubmission(res: unknown): { submissionId: number; slug?: string } {

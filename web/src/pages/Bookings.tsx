@@ -337,6 +337,8 @@ function ContractTab({ booking: b, readOnly }: { booking: any; readOnly: boolean
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api('/templates') });
   const [templateId, setTemplateId] = useState('');
   const [preview, setPreview] = useState<string | null>(null);
+  const chosen = templates.data?.find((t: any) => t.id === templateId);
+  const needsMapping = s?.docusealEdition === 'free' && chosen && !chosen.docusealTemplateId;
   const inv = [['booking', b.id]];
   const create = useMutate((send: boolean) => api(`/bookings/${b.id}/contracts`, { body: { templateId, send } }), inv);
   const send = useMutate((cid: string) => api(`/contracts/${cid}/send`, { method: 'POST' }), inv);
@@ -354,8 +356,9 @@ function ContractTab({ booking: b, readOnly }: { booking: any; readOnly: boolean
               {templates.data?.filter((t: any) => !t.archived).map((t: any) => <option key={t.id} value={t.id}>{t.name} (v{t.latestVersion})</option>)}
             </Select>
             <Button variant="secondary" disabled={!templateId} loading={create.isPending} onClick={() => create.mutate(false)}>Generate draft</Button>
-            <Button disabled={!templateId || !s?.hasDocusealToken || !b.client.email} loading={create.isPending} onClick={() => create.mutate(true)}>Generate & send for signature</Button>
+            <Button disabled={!templateId || !s?.hasDocusealToken || !b.client.email || needsMapping} loading={create.isPending} onClick={() => create.mutate(true)}>Generate & send for signature</Button>
           </div>
+          {needsMapping && <p className="mt-2 text-sm text-amber-700">This template isn’t mapped to a Docuseal template, which the free edition of Docuseal requires for signing. <Link to={`/contracts/${templateId}`} className="underline">Map it</Link>.</p>}
           {templates.data?.length === 0 && <p className="mt-2 text-sm text-slate-500">No templates yet — <Link to="/contracts" className="text-brand-accent">create one</Link>.</p>}
         </Card>
       )}

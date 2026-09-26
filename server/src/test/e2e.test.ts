@@ -26,6 +26,7 @@ function mockServer(): Promise<{ server: Server; url: string }> {
         if (u.startsWith('/in/api/v1/invoices/inv1')) return send({ data: { id: 'inv1', number: '0001', status_id: invoiceStatus, paid_to_date: invoiceStatus === '4' ? 1 : 0, invitations: [] } });
         if (u.startsWith('/ds/api/templates')) return send({ data: [{ id: 7, name: 'DS Template' }] });
         if (u === '/ds/api/submissions/html') return send({ id: 555, submitters: [{ id: 9, slug: 'abc', submission_id: 555 }] });
+        if (u === '/ds/api/submissions' && req.method === 'POST') return send([{ id: 10, submission_id: 777, slug: 'mapped' }]);
         if (u.startsWith('/ds/api/submissions/555/documents')) return send({ documents: [{ name: 'signed', url: '/ds/file.pdf' }] });
         if (u === '/ds/file.pdf') { res.setHeader('Content-Type', 'application/pdf'); return res.end('%PDF-1.4 fake'); }
         res.statusCode = 404; send({ message: 'nope ' + u });
@@ -114,7 +115,7 @@ run('end-to-end', () => {
     const c = (await api('POST', `/api/bookings/${bookingId}/contracts`, { templateId: tpl.id, send: true })).body;
     expect(c.mergedContent).toContain('v2 Client Co');
     await settle();
-    const htmlCall = calls.find((x) => x.url === '/ds/api/submissions/html');
+    const htmlCall = calls.find((x) => x.url === '/ds/api/submissions/html' && x.body?.submitters);
     expect(htmlCall?.body.submitters[0].email).toBe('c@example.com');
     expect(htmlCall?.body.documents[0].html).toContain('signature-field');
     const settings = await prisma().businessProfile.findUnique({ where: { id: 1 } });
@@ -150,6 +151,43 @@ run('end-to-end', () => {
     await settle();
     b = (await api('GET', `/api/bookings/${bookingId}`)).body;
     expect(b.status).toBe('PAID');
+  });
+
+  it('accepts HMAC-signed Docuseal webhooks without the shared header', async () => {
+    const hmac = 'whsec_' + 'x'.repeat(32);
+    expect((await api('PUT', '/api/settings/docuseal', { docusealUrl: `${mock.url}/ds`, docusealWebhookHmacSecret: hmac })).status).toBe(200);
+    const s = await prisma().businessProfile.findUnique({ where: { id: 1 } });
+    const body = JSON.stringify({ event_type: 'form.viewed', data: { id: 9, submission_id: 555 } });
+    const ts = Math.floor(Date.now() / 1000);
+    const { createHmac } = await import('node:crypto');
+    const sig = `${ts}.${createHmac('sha256', hmac).update(`${ts}.${body}`).digest('hex')}`;
+    const url = `/api/webhooks/docuseal/${s!.docusealWebhookKey}`;
+    const send = (signature: string, payload = body) => app.inject({ method: 'POST', url, payload, headers: { 'content-type': 'application/json', 'x-docuseal-signature': signature } });
+    expect((await send(sig)).statusCode).toBe(200);
+    expect((await send(sig, body.replace('viewed', 'declined'))).statusCode).toBe(404); // tampered
+    expect((await api('GET', '/api/settings')).body.hasDocusealWebhookHmacSecret).toBe(true);
+    expect(JSON.stringify((await api('GET', '/api/settings')).body)).not.toContain(hmac);
+    await settle();
+  });
+
+  it('requires mapped templates on the Docuseal free edition and locks prefilled values', async () => {
+    expect((await api('PUT', '/api/settings/docuseal', { docusealUrl: `${mock.url}/ds`, docusealEdition: 'free' })).status).toBe(200);
+    const tpl = (await api('POST', '/api/templates', { name: 'Unmapped', content: '<p>{{client_name}}</p>' })).body;
+    const refused = await api('POST', `/api/bookings/${bookingId}/contracts`, { templateId: tpl.id, send: true });
+    expect(refused.status).toBe(412);
+    expect(refused.body.error).toMatch(/free edition/);
+    await api('PUT', `/api/templates/${tpl.id}`, { name: 'Unmapped', docusealTemplateId: '42' });
+    const ok = await api('POST', `/api/bookings/${bookingId}/contracts`, { templateId: tpl.id, send: true });
+    expect(ok.status).toBe(200);
+    await settle();
+    const call = calls.find((x) => x.url === '/ds/api/submissions' && x.method === 'POST');
+    expect(call?.body.template_id).toBe(42);
+    const sub = call?.body.submitters[0];
+    expect(sub.email).toBe('c@example.com');
+    expect(sub.values.client_name).toBe('Client Co');
+    expect(sub.values.equipment_list).toContain('Speaker');
+    expect(sub.readonly_fields).toEqual(Object.keys(sub.values));
+    await api('PUT', '/api/settings/docuseal', { docusealUrl: `${mock.url}/ds`, docusealEdition: 'pro' });
   });
 
   it('records webhook events and allows replay', async () => {

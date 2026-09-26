@@ -17,6 +17,8 @@ export const env = {
   storagePath: process.env.STORAGE_PATH ?? './storage',
   port: Number(process.env.PORT ?? 3000),
   publicUrl: process.env.PUBLIC_URL ?? '',
+  // Address other containers on the same Docker network can use (set by docker-compose.docuseal.yml).
+  internalUrl: process.env.INTERNAL_URL ?? '',
   webDist: process.env.WEB_DIST ?? '',
   // Which hops may set X-Forwarded-* (client IP drives login throttling). Defaults to
   // loopback + private networks, i.e. a reverse proxy on the same host or Docker network.

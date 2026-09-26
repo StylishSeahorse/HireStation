@@ -4,6 +4,8 @@ import { isValidAbn, isValidAcn, isValidBsb } from './au.js';
 import { hireDays } from './dates.js';
 import { RateLimiter } from './rateLimit.js';
 import { redact } from './audit.js';
+import { createHmac } from 'node:crypto';
+import { verifyDocusealSignature } from '../routes/webhooks.js';
 
 describe('AU validators', () => {
   it('validates ABN checksum', () => {
@@ -77,5 +79,22 @@ describe('rate limiter', () => {
 describe('audit redaction', () => {
   it('redacts secret-looking keys at any depth', () => {
     expect(redact({ name: 'a', invoiceNinjaToken: 't', nested: { password: 'p', ok: 1 } })).toEqual({ name: 'a', invoiceNinjaToken: '[redacted]', nested: { password: '[redacted]', ok: 1 } });
+  });
+});
+
+describe('Docuseal webhook signature', () => {
+  const secret = 'whsec_test';
+  const body = '{"event_type":"form.completed"}';
+  const sign = (ts: number, b = body) => `${ts}.${createHmac('sha256', secret).update(`${ts}.${b}`).digest('hex')}`;
+  const now = 1_790_000_000_000;
+  it('accepts a fresh valid signature', () => {
+    expect(verifyDocusealSignature(secret, body, sign(now / 1000), now)).toBe(true);
+  });
+  it('rejects a tampered body, wrong secret, stale timestamp or garbage', () => {
+    expect(verifyDocusealSignature(secret, body + ' ', sign(now / 1000), now)).toBe(false);
+    expect(verifyDocusealSignature('whsec_other', body, sign(now / 1000), now)).toBe(false);
+    expect(verifyDocusealSignature(secret, body, sign(now / 1000 - 301), now)).toBe(false);
+    expect(verifyDocusealSignature(secret, body, 'nonsense', now)).toBe(false);
+    expect(verifyDocusealSignature(secret, body, undefined, now)).toBe(false);
   });
 });

@@ -6,6 +6,8 @@ import { brandedDocument, mergeTemplate, mergeValues, MergeBooking } from '../li
 import { docusealClient, requireProfile, taxOf } from '../lib/profile.js';
 import { computeTotals } from '../lib/pricing.js';
 import { fileExists, mimeOf, readStored, saveFile } from '../lib/storage.js';
+import { IntegrationError } from './http.js';
+import { isProOnlyError } from './docuseal.js';
 
 export async function logoDataUri(p: BusinessProfile): Promise<string | null> {
   if (!p.logoPath || !fileExists(p.logoPath)) return null;
@@ -69,19 +71,26 @@ export async function sendContract(contractId: string) {
   const { client: ds, profile } = await docusealClient();
   const signer = { name: c.booking.client.contactName || c.booking.client.name, email };
   const name = `Hire agreement ${c.booking.reference}`;
+  const message = { subject: `Please sign: ${name}`, body: `Hi {{submitter.name}},\n\nPlease review and sign your hire agreement for ${c.booking.title}.\n\n{{submitter.link}}\n\n${profile.tradingName || profile.legalName}` };
   const mapped = c.templateVersion.template.docusealTemplateId;
+  assertSendable(profile, mapped);
   let res;
   if (mapped) {
-    // Mapped mode: the Docuseal template carries the layout; merge values prefill its fields.
+    // Mapped mode: the Docuseal template carries the layout; merge values prefill (and lock) its fields.
     const b = await prisma.booking.findUniqueOrThrow({ where: { id: c.bookingId }, include: bookingInclude });
     const values = mergeValues(b, quoteTotals(b, taxOf(profile)), profile).text;
-    res = await ds.submitTemplate({ templateId: Number(mapped), signer, values });
+    res = await ds.submitTemplate({ templateId: Number(mapped), signer, values, message });
   } else {
-    // Default: this app's merged, branded HTML is the document that gets signed.
-    res = await ds.submitHtml({
-      name, html: await contractHtml(c.id), signer,
-      message: { subject: `Please sign: ${name}`, body: `Hi {{submitter.name}},\n\nPlease review and sign your hire agreement for ${c.booking.title}.\n\n{{submitter.link}}\n\n${profile.tradingName || profile.legalName}` },
-    });
+    // Pro edition: this app's merged, branded HTML is the document that gets signed.
+    try {
+      res = await ds.submitHtml({ name, html: await contractHtml(c.id), signer, message });
+    } catch (e) {
+      if (e instanceof IntegrationError && isProOnlyError(e)) {
+        await prisma.businessProfile.update({ where: { id: 1 }, data: { docusealEdition: 'free' } });
+        throw new HttpError(412, FREE_EDITION_MESSAGE);
+      }
+      throw e;
+    }
   }
   const updated = await prisma.contract.update({
     where: { id: c.id },
@@ -92,6 +101,14 @@ export async function sendContract(contractId: string) {
   return updated;
 }
 
+export const FREE_EDITION_MESSAGE =
+  'Your Docuseal is the free edition, which can only send templates built in Docuseal. Map this contract template to a Docuseal template (Contracts → template → Docuseal template), then send again.';
+
+/** Free-edition Docuseal can't sign arbitrary documents, so unmapped templates can't be sent. */
+export function assertSendable(profile: BusinessProfile, docusealTemplateId: string | null) {
+  if (!docusealTemplateId && profile.docusealEdition === 'free') throw new HttpError(412, FREE_EDITION_MESSAGE);
+}
+
 /** Download the completed PDF from Docuseal and keep our own copy. */
 export async function fetchSignedPdf(contractId: string, documents?: { name: string; url: string }[]) {
   const c = await prisma.contract.findUnique({ where: { id: contractId } });
@@ -100,8 +117,10 @@ export async function fetchSignedPdf(contractId: string, documents?: { name: str
   const { client: ds, profile } = await docusealClient();
   const docs = documents?.length ? documents : await ds.getDocuments(c.docusealSubmissionId);
   if (!docs.length) throw new Error('Docuseal returned no documents yet');
-  // Document URLs may be relative to the Docuseal host.
-  const url = new URL(docs[0].url, profile.docusealUrl!).toString();
+  // Docuseal builds file links on its public HOST. Fetch the same path via the configured API
+  // URL instead, so an internal address (e.g. http://docuseal:3000) works and we avoid hairpin NAT.
+  const link = new URL(docs[0].url, profile.docusealUrl!);
+  const url = new URL(link.pathname + link.search, profile.docusealUrl!.replace(/\/+$/, '') + '/').toString();
   const res = await fetch(url, { headers: { 'X-Auth-Token': profile.docusealToken! } });
   if (!res.ok) throw new Error(`Failed to download signed PDF: HTTP ${res.status}`);
   const path = await saveFile('contracts', 'signed.pdf', Buffer.from(await res.arrayBuffer()));

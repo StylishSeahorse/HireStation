@@ -19,55 +19,59 @@ enum BusinessStructure {
 }
 
 model BusinessProfile {
-  id                     Int               @id @default(1)
+  id                        Int               @id @default(1)
   // Identity
-  legalName              String
-  tradingName            String?
-  structure              BusinessStructure
-  abn                    String
-  acn                    String?
-  addressLine1           String
-  addressLine2           String?
-  suburb                 String
-  state                  String
-  postcode               String
-  contactEmail           String
-  contactPhone           String
-  abrGuid                String?
-  signatoryName          String?
-  signatoryTitle         String?
+  legalName                 String
+  tradingName               String?
+  structure                 BusinessStructure
+  abn                       String
+  acn                       String?
+  addressLine1              String
+  addressLine2              String?
+  suburb                    String
+  state                     String
+  postcode                  String
+  contactEmail              String
+  contactPhone              String
+  abrGuid                   String?
+  signatoryName             String?
+  signatoryTitle            String?
   // Tax
-  gstRegistered          Boolean
-  gstRate                Decimal           @db.Decimal(5, 2)
+  gstRegistered             Boolean
+  gstRate                   Decimal           @db.Decimal(5, 2)
   // Banking
-  bankBsb                String
-  bankAccountNumber      String
-  bankAccountName        String
+  bankBsb                   String
+  bankAccountNumber         String
+  bankAccountName           String
   // Branding
-  logoPath               String?
-  primaryColour          String?
-  accentColour           String?
-  documentFooter         String?
+  logoPath                  String?
+  primaryColour             String?
+  accentColour              String?
+  documentFooter            String?
   // Locale
-  timezone               String
-  currency               String
-  dateFormat             String
-  holidayRegion          String?
+  timezone                  String
+  currency                  String
+  dateFormat                String
+  holidayRegion             String?
   // Invoice Ninja
-  invoiceNinjaUrl        String?
-  invoiceNinjaToken      String?
-  invoiceNinjaCompanyId  String?
-  invoiceNinjaWebhookKey String?
+  invoiceNinjaUrl           String?
+  invoiceNinjaToken         String?
+  invoiceNinjaCompanyId     String?
+  invoiceNinjaWebhookKey    String?
   // Docuseal
-  docusealUrl            String?
-  docusealToken          String?
-  docusealWebhookKey     String?
+  docusealUrl               String?
+  docusealToken             String?
+  // 'pro' | 'free' — detected on connection test. The free edition can only sign UI-built templates.
+  docusealEdition           String?
+  docusealWebhookKey        String?
   // Shared secret the integrations must send in the X-Webhook-Secret header.
-  webhookSecret          String?
+  webhookSecret             String?
+  // Docuseal's per-webhook HMAC signing secret (whsec_…), used to verify X-Docuseal-Signature.
+  docusealWebhookHmacSecret String?
   // Operational defaults
-  contractReminderDays   Int               @default(3)
-  createdAt              DateTime          @default(now())
-  updatedAt              DateTime          @updatedAt
+  contractReminderDays      Int               @default(3)
+  createdAt                 DateTime          @default(now())
+  updatedAt                 DateTime          @updatedAt
 }
 
 enum Role {

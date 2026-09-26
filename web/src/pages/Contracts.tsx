@@ -138,7 +138,10 @@ export function TemplateEditor() {
                 ) : <Input value={meta.docusealTemplateId} disabled={ro} placeholder="Docuseal template ID" onChange={(e) => setMeta({ ...meta, docusealTemplateId: e.target.value })} />}
               </Field>
             </div>
-            {meta.docusealTemplateId && <p className="mt-2 text-xs text-slate-500">Mapped mode: Docuseal’s template provides the layout, and fields named after merge keys (e.g. <code>client_name</code>) are prefilled from the booking.</p>}
+            {meta.docusealTemplateId && <p className="mt-2 text-xs text-slate-500">Mapped mode: Docuseal’s template provides the layout, and its fields named after merge keys (e.g. <code>client_name</code>, <code>equipment_list</code>) are prefilled from the booking and locked.</p>}
+            {!meta.docusealTemplateId && s?.docusealEdition === 'free' && (
+              <div className="mt-2"><Alert tone="amber">Your Docuseal is the free edition, so this template can’t be sent for signing until it’s mapped to a Docuseal template. You can still generate and preview contracts.</Alert></div>
+            )}
           </Card>
           <div className="rounded-lg border bg-white shadow-sm">
             <Toolbar editor={editor} />

@@ -72,6 +72,39 @@ reverse proxy on its own subdomain. It is published on `APP_BIND:APP_PORT`
 The business profile now lives in the database, not a config file, so include
 `BACKUP_PATH` in your normal off-site backups.
 
+### With a bundled Docuseal
+
+`docker-compose.docuseal.yml` adds Docuseal (plus its own Postgres) to the same stack.
+Invoice Ninja stays external (your existing instance).
+
+```sh
+# in .env (see the "Bundled Docuseal" block in .env.example)
+COMPOSE_FILE=docker-compose.yml:docker-compose.docuseal.yml
+DOCUSEAL_HOST=sign.example.com
+DOCUSEAL_DB_PASSWORD=<random>
+# DOCUSEAL_SMTP_* so Docuseal can email signing links (or set it in Docuseal's UI)
+
+docker compose up -d --build
+```
+
+Then, once:
+
+1. Point `sign.example.com` at `127.0.0.1:DOCUSEAL_PORT` (default 3001) in your reverse
+   proxy (examples in `deploy/`). Open it and create the Docuseal admin account.
+2. Docuseal → Settings → **API**: copy the token. In HireStation (wizard step 7 or
+   Settings → Docuseal) use URL **`http://docuseal:3000`** (internal network, no proxy
+   round trip) and that token, then **Test connection**. This also detects the Docuseal edition.
+3. Docuseal → Settings → **Webhooks**: add the **internal URL** shown under Settings →
+   Docuseal in HireStation (`http://app:3000/api/webhooks/docuseal/…`). The default events
+   are the right ones. Copy the webhook's **signing secret** (`whsec_…`) into HireStation's
+   "Webhook signing secret" field and save.
+
+Backups then also include Docuseal's database and its data volume. The data volume
+includes `docuseal.env`, the key that decrypts Docuseal's data, so keep backups safe.
+
+Restore Docuseal: `docker compose exec -T docuseal-db pg_restore -U docuseal -d docuseal --clean < backups/docuseal-db-….dump`,
+and untar `docuseal-data-….tar.gz` into the `docuseal-data` volume.
+
 ## First-run wizard
 
 1. Admin account (only possible while no user exists)
@@ -113,15 +146,34 @@ features stay disabled until you connect them in Settings.
   the local mirror, and marks the booking **Paid** once every invoice is paid.
 
 ### Docuseal
-- By default, the merged, branded contract HTML (logo, colours, footer) is
-  submitted via `POST /api/submissions/html` with the client as signer. Docuseal
-  emails the signing link. `{{client_signature}}` / `{{client_signed_date}}`
-  place the fields; if they're missing, a signature block is appended.
-- Optionally, map a contract template to an existing Docuseal template. The
-  booking's merge values then prefill fields with matching names.
-- Webhook (add the URL from Settings → Docuseal in Docuseal's webhook settings):
-  `form.viewed` → Contract viewed, `form.completed` → Contract signed (the
-  signed PDF is downloaded and stored locally), `form.declined` → Declined.
+
+How contracts are sent depends on the **Docuseal edition**, which "Test connection" detects:
+
+- **Pro:** the merged, branded contract HTML (logo, colours, footer) is submitted via
+  `POST /api/submissions/html` with the client as signer. `{{client_signature}}` /
+  `{{client_signed_date}}` place the fields; if they're missing, a signature block is appended.
+- **Free (community) edition:** Docuseal only allows signing templates built in its own UI.
+  The HTML/PDF submission APIs are Pro-only. Each HireStation contract template must be
+  **mapped** to a Docuseal template (Contracts → template → "Docuseal template"). Unmapped
+  templates are refused with a clear message.
+  - In Docuseal, upload your agreement (e.g. HireStation's *Print / save as PDF* preview) and
+    add text fields **named after merge fields**: `client_name`, `client_abn`, `event_title`,
+    `event_date_range`, `venue`, `equipment_list`, `total_hire_cost`, `bond_amount`,
+    `business_name`, `business_abn`, … plus a signature field. Name them in Docuseal's
+    builder. Its PDF import drops form-field names that contain underscores.
+  - HireStation prefills those fields for each booking and **locks them read-only**, so the
+    client can't change prices or terms. `equipment_list` is a plain-text version of the equipment table.
+  - Mapping also works on Pro if you prefer Docuseal's layout.
+
+In both cases Docuseal emails the signing link. Webhooks:
+`form.viewed` → Contract viewed, `form.completed` → Contract signed (the signed PDF is
+downloaded through the configured Docuseal URL and stored locally), `form.declined` → Declined.
+They're verified by Docuseal's **HMAC signature** (`X-Docuseal-Signature`) when the webhook's
+signing secret is saved in Settings. The shared `X-Webhook-Secret` header also works.
+
+Tested end to end against a real Docuseal 3.2.6 (free edition) running from
+`docker-compose.docuseal.yml`: send → client views → signs → HMAC-verified webhooks →
+booking "Contract signed" → signed PDF stored.
 - The hourly reminder scan notifies staff about contracts still unsigned within
   N days of the event and asks Docuseal to re-send the signing email.
 
@@ -158,8 +210,9 @@ features stay disabled until you connect them in Settings.
 - **Audit log** (Settings → Audit log, admins only): every sign-in, failed or throttled sign-in,
   setup step and state-changing API call, with user, IP, result and request body. Secrets
   (tokens, passwords, GUIDs, keys) are redacted before storage, and large bodies are reduced to their field names.
-- **Webhooks:** Invoice Ninja and Docuseal don't sign their webhooks, so each request needs both
-  an unguessable URL key *and* an `X-Webhook-Secret` header (shown in Settings). "Register
+- **Webhooks:** each request needs an unguessable URL key *and* proof of origin. Docuseal's
+  requests are verified with its HMAC `X-Docuseal-Signature` (5-minute replay window) once its
+  signing secret is saved. Invoice Ninja doesn't sign, so it must send the `X-Webhook-Secret` header (shown in Settings). "Register
   webhooks" configures Invoice Ninja's header automatically. In Docuseal, add it as a custom
   header. Events are stored and processed by retryable jobs. **Settings → Webhook log** shows
   failures and lets you replay any event.

@@ -1,0 +1,78 @@
+# Adds a self-hosted Docuseal next to HireStation. Use it together with the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.docuseal.yml up -d
+#
+# or set COMPOSE_FILE=docker-compose.yml:docker-compose.docuseal.yml in .env so a plain
+# `docker compose up -d` brings up both. Invoice Ninja stays external (your existing instance).
+#
+# Docuseal is self-contained: it runs its own background jobs and Redis inside the container,
+# and generates its SECRET_KEY_BASE into the docuseal-data volume on first boot.
+
+services:
+  docuseal:
+    image: docuseal/docuseal:${DOCUSEAL_VERSION:-3.2.6}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://docuseal:${DOCUSEAL_DB_PASSWORD:?set DOCUSEAL_DB_PASSWORD}@docuseal-db:5432/docuseal
+      # Public hostname used in signing links and emails (e.g. sign.example.com).
+      HOST: ${DOCUSEAL_HOST:?set DOCUSEAL_HOST}
+      # Behind an HTTPS reverse proxy: generate https:// links and trust the proxy's TLS.
+      # Internal plain-HTTP calls from HireStation still work (Rails assume_ssl).
+      FORCE_SSL: ${DOCUSEAL_FORCE_SSL:-true}
+      # Outgoing email for signing links. Can also be configured later in Docuseal → Settings → Email.
+      SMTP_ADDRESS: ${DOCUSEAL_SMTP_ADDRESS:-}
+      SMTP_PORT: ${DOCUSEAL_SMTP_PORT:-587}
+      SMTP_USERNAME: ${DOCUSEAL_SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${DOCUSEAL_SMTP_PASSWORD:-}
+      SMTP_DOMAIN: ${DOCUSEAL_SMTP_DOMAIN:-}
+      SMTP_FROM: ${DOCUSEAL_SMTP_FROM:-}
+      SMTP_AUTHENTICATION: ${DOCUSEAL_SMTP_AUTHENTICATION:-plain}
+    volumes:
+      - docuseal-data:/data/docuseal
+    ports:
+      # Published for your reverse proxy (signers open links on DOCUSEAL_HOST).
+      - "${DOCUSEAL_BIND:-127.0.0.1}:${DOCUSEAL_PORT:-3001}:3000"
+    depends_on:
+      docuseal-db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/up || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+
+  docuseal-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: docuseal
+      POSTGRES_PASSWORD: ${DOCUSEAL_DB_PASSWORD}
+      POSTGRES_DB: docuseal
+    volumes:
+      - docuseal-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docuseal"]
+      interval: 5s
+      retries: 10
+
+  app:
+    environment:
+      # Lets Settings show the internal webhook URL Docuseal can call directly.
+      INTERNAL_URL: http://app:3000
+
+  worker:
+    environment:
+      INTERNAL_URL: http://app:3000
+
+  # Nightly backups also cover Docuseal's database and files (signed PDFs, templates, secret key).
+  backup:
+    environment:
+      DOCUSEAL_PGHOST: docuseal-db
+      DOCUSEAL_PGPASSWORD: ${DOCUSEAL_DB_PASSWORD}
+    volumes:
+      - docuseal-data:/docuseal-data:ro
+    depends_on:
+      docuseal-db: { condition: service_healthy }
+
+volumes:
+  docuseal-data:
+  docuseal-pgdata:
