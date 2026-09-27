@@ -12,7 +12,13 @@ async function ensureClient(inClient: InvoiceNinja, clientId: string): Promise<s
   const c = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
   if (c.invoiceNinjaClientId) return c.invoiceNinjaClientId;
   const id = (await inClient.findClient(c.email, c.abn)) ?? (await inClient.createClient(c));
-  await prisma.client.update({ where: { id: c.id }, data: { invoiceNinjaClientId: id } });
+  try {
+    await prisma.client.update({ where: { id: c.id }, data: { invoiceNinjaClientId: id } });
+  } catch (e) {
+    // Another HireStation client is already linked to this Invoice Ninja client (a local duplicate).
+    // Invoice under that Invoice Ninja client anyway; the link stays with the first one.
+    if ((e as { code?: string }).code !== 'P2002') throw e;
+  }
   return id;
 }
 

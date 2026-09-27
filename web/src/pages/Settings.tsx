@@ -77,6 +77,7 @@ function Section({ name }: { name: string }) {
         </div>
         {save.error && <div className="mt-2"><Alert>{save.error}</Alert></div>}
       </Card>
+      {name === 'invoiceNinja' && s.hasInvoiceNinjaToken && <ClientSync />}
       {(name === 'invoiceNinja' || name === 'docuseal') && <Webhooks which={name} />}
     </div>
   );
@@ -166,6 +167,47 @@ function Users() {
           <Button loading={create.isPending}>Create user</Button>
         </form>
       </Modal>
+    </Card>
+  );
+}
+
+const ACTION_TONE: Record<string, any> = { created: 'green', updated: 'blue', linked: 'amber', unchanged: 'slate' };
+const ACTION_LABEL: Record<string, string> = { created: 'New', updated: 'Update', linked: 'Link existing', unchanged: 'Up to date' };
+
+function ClientSync() {
+  const [preview, setPreview] = useState<any>(null);
+  const [result, setResult] = useState<any>(null);
+  const [showAll, setShowAll] = useState(false);
+  const load = useMutate(() => api('/invoice-ninja/clients/preview'), [], (r) => { setPreview(r); setResult(null); });
+  const run = useMutate(() => api('/invoice-ninja/clients/import', { method: 'POST' }), [['clients']], (r) => { setResult(r); setPreview(null); });
+  const data = result ?? preview;
+  const items = (data?.items ?? []).filter((i: any) => showAll || i.action !== 'unchanged');
+  return (
+    <Card title="Client sync" actions={<>
+      <Button size="sm" variant="secondary" onClick={() => load.mutate(undefined)} loading={load.isPending}>Preview import</Button>
+      {preview && <Button size="sm" onClick={() => run.mutate(undefined)} loading={run.isPending}>Import {preview.created + preview.updated + preview.linked} change(s)</Button>}
+    </>}>
+      <p className="mb-3 text-sm text-slate-500">
+        Invoice Ninja is the source of truth for client details. Importing brings in all active Invoice Ninja clients: existing HireStation
+        clients are matched by Invoice Ninja link, then email, then ABN, so nothing is duplicated. After that, clients created or changed
+        in Invoice Ninja update here automatically through the webhook (re-run “Register webhooks” once to add client events).
+        HireStation’s own notes and bookings are never overwritten, and nothing is deleted here.
+      </p>
+      {(load.error || run.error) && <Alert>{load.error || run.error}</Alert>}
+      {data && (
+        <div className="space-y-3">
+          <Alert tone={result ? 'green' : 'blue'}>
+            {result ? 'Imported' : 'Preview'} — {data.total} Invoice Ninja client(s): <strong>{data.created}</strong> new, <strong>{data.updated}</strong> to update,{' '}
+            <strong>{data.linked}</strong> existing HireStation client(s) to link, {data.unchanged} already up to date.
+          </Alert>
+          <label className="inline-flex items-center gap-2 text-sm font-normal"><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show up-to-date clients</label>
+          <Table head={['Client', 'Action', 'Changes']} empty="Nothing to change.">
+            {items.slice(0, 300).map((i: any, n: number) => (
+              <tr key={n}><Td className="font-medium">{i.name}</Td><Td><Badge tone={ACTION_TONE[i.action]}>{ACTION_LABEL[i.action]}</Badge></Td><Td className="text-xs text-slate-500">{i.changes?.join(', ')}</Td></tr>
+            ))}
+          </Table>
+        </div>
+      )}
     </Card>
   );
 }

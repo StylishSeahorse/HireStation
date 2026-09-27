@@ -17,6 +17,32 @@ export interface InInvoice {
   invitations?: { link?: string; key?: string }[];
 }
 
+export interface InContact {
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  is_primary?: boolean;
+}
+
+export interface InClient {
+  id: string;
+  name?: string;
+  display_name?: string;
+  vat_number?: string;
+  id_number?: string;
+  phone?: string;
+  address1?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  postal_code?: string;
+  is_deleted?: boolean;
+  archived_at?: number;
+  updated_at?: number;
+  contacts?: InContact[];
+}
+
 export interface InLineItem {
   product_key: string;
   notes: string;
@@ -64,6 +90,22 @@ export class InvoiceNinja {
     return null;
   }
 
+  /** Every active (not archived, not deleted) client, following pagination. */
+  async listActiveClients(): Promise<InClient[]> {
+    const all: InClient[] = [];
+    for (let page = 1; page <= 200; page++) {
+      const res = await this.req<{ data: InClient[]; meta?: { pagination?: { total_pages?: number } } }>('GET', `/clients?per_page=100&page=${page}&status=active`);
+      all.push(...res.data);
+      const pages = res.meta?.pagination?.total_pages ?? 1;
+      if (page >= pages || res.data.length === 0) break;
+    }
+    return all.filter((c) => !c.is_deleted && !c.archived_at);
+  }
+
+  async getClient(id: string): Promise<InClient> {
+    return (await this.req<{ data: InClient }>('GET', `/clients/${encodeURIComponent(id)}`)).data;
+  }
+
   async createClient(c: { name: string; contactName?: string | null; email?: string | null; phone?: string | null; abn?: string | null; address?: string | null }): Promise<string> {
     const [first, ...rest] = (c.contactName || c.name).split(' ');
     const res = await this.req<{ data: { id: string } }>('POST', '/clients', {
@@ -96,10 +138,11 @@ export class InvoiceNinja {
     return this.req('GET', `/payments/${id}?include=paymentables`);
   }
 
-  /** Subscribe Invoice Ninja webhooks to this app. Event ids: 2=create invoice, 8=update invoice, 4=create payment. */
+  /** Subscribe Invoice Ninja webhooks to this app (event ids listed below; existing subscriptions are updated). */
   async registerWebhooks(targetUrl: string, headers: Record<string, string>): Promise<void> {
     const existing = await this.req<{ data: { id: string; target_url: string; event_id: string }[] }>('GET', '/webhooks');
-    for (const event_id of ['2', '4', '8']) {
+    // 1 = client created, 10 = client updated (client sync); 2/8 = invoice created/updated; 4 = payment created.
+    for (const event_id of ['1', '2', '4', '8', '10']) {
       const body = { target_url: targetUrl, event_id, format: 'JSON', rest_method: 'post', headers };
       const found = existing.data.find((w) => w.target_url === targetUrl && String(w.event_id) === event_id);
       // Update existing subscriptions so a rotated secret header takes effect.

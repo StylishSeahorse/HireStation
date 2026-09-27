@@ -9,6 +9,8 @@ const run = TEST_DB ? describe : describe.skip;
 
 const calls: { method: string; url: string; body: any }[] = [];
 let invoiceStatus = '1';
+// Invoice Ninja's client list for the client-sync tests (mutable per test).
+const inClients: any[] = [];
 function mockServer(): Promise<{ server: Server; url: string }> {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
@@ -20,7 +22,16 @@ function mockServer(): Promise<{ server: Server; url: string }> {
         const send = (o: unknown) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(o)); };
         const u = req.url!;
         if (u.startsWith('/in/api/v1/companies')) return send({ data: [{ id: 'co1', settings: { name: 'Co One' } }, { id: 'co2', settings: { name: 'Co Two' } }] });
+        if (u.startsWith('/in/api/v1/clients?') && u.includes('status=active')) {
+          const page = Number(new URL(u, 'http://x').searchParams.get('page') ?? 1);
+          const slice = inClients.slice((page - 1) * 2, page * 2); // 2 per page to exercise pagination
+          return send({ data: slice, meta: { pagination: { total_pages: Math.max(1, Math.ceil(inClients.length / 2)) } } });
+        }
         if (u.startsWith('/in/api/v1/clients?')) return send({ data: [] });
+        if (u.startsWith('/in/api/v1/clients/')) {
+          const c = inClients.find((x) => x.id === decodeURIComponent(u.split('/').pop()!.split('?')[0]));
+          return c ? send({ data: c }) : (res.statusCode = 404, send({ message: 'not found' }));
+        }
         if (u === '/in/api/v1/clients') return send({ data: { id: 'inclient1' } });
         if (u === '/in/api/v1/invoices' && req.method === 'POST') return send({ data: { id: 'inv1', number: '0001', status_id: '1', invitations: [{ link: 'http://x/inv' }] } });
         if (u.startsWith('/in/api/v1/invoices/inv1')) return send({ data: { id: 'inv1', number: '0001', status_id: invoiceStatus, paid_to_date: invoiceStatus === '4' ? 1 : 0, invitations: [] } });
@@ -255,6 +266,49 @@ run('end-to-end', () => {
     const log = (await api('GET', '/api/audit?q=auth.login')).body;
     expect(log.some((l: any) => l.action === 'auth.login_failed')).toBe(true);
     expect(log.some((l: any) => l.action === 'auth.login_throttled')).toBe(true);
+  });
+
+  it('imports clients from Invoice Ninja (source of truth) and keeps them in sync', async () => {
+    // An existing HireStation client that Invoice Ninja also has (same email, not yet linked).
+    const local = (await api('POST', '/api/clients', { type: 'INDIVIDUAL', name: 'jo old name', email: 'Jo@Example.com', notes: 'VIP, keep' })).body;
+    inClients.push(
+      { id: 'in-jo', name: '', contacts: [{ first_name: 'Jo', last_name: 'Bloggs', email: 'jo@example.com', phone: '0400 111 222', is_primary: true }], vat_number: '' },
+      { id: 'in-acme', name: 'Acme Events Pty Ltd', vat_number: '51 824 753 556', address1: '1 Main St', city: 'Brisbane', state: 'QLD', postal_code: '4000',
+        contacts: [{ first_name: 'Sam', last_name: 'Lee', email: 'sam@acme.example', is_primary: true }] },
+      { id: 'in-bad-abn', name: 'Overseas Co', vat_number: 'GB123456789', contacts: [{ first_name: 'Al', email: 'al@overseas.example' }] },
+      { id: 'in-archived', name: 'Old Client', archived_at: 1700000000, contacts: [] },
+    );
+    const before = (await api('GET', '/api/clients')).body.length;
+    const preview = (await api('GET', '/api/invoice-ninja/clients/preview')).body;
+    expect(preview).toMatchObject({ total: 3, created: 2, linked: 1 });
+    expect((await api('GET', '/api/clients')).body.length).toBe(before); // preview changes nothing
+
+    const done = (await api('POST', '/api/invoice-ninja/clients/import')).body;
+    expect(done).toMatchObject({ created: 2, linked: 1 });
+    const clients = (await api('GET', '/api/clients')).body;
+    expect(clients.length).toBe(before + 2); // matched by email, not duplicated; archived skipped
+    const jo = clients.find((c: any) => c.id === local.id);
+    expect(jo).toMatchObject({ name: 'Jo Bloggs', type: 'INDIVIDUAL', phone: '0400 111 222', invoiceNinjaClientId: 'in-jo', notes: 'VIP, keep' });
+    const acme = clients.find((c: any) => c.invoiceNinjaClientId === 'in-acme');
+    expect(acme).toMatchObject({ type: 'BUSINESS', name: 'Acme Events Pty Ltd', contactName: 'Sam Lee', abn: '51824753556', address: '1 Main St, Brisbane QLD 4000' });
+    expect(clients.find((c: any) => c.invoiceNinjaClientId === 'in-bad-abn').abn).toBeNull(); // non-ABN tax ids aren't stored as ABN
+
+    // Re-running is idempotent.
+    expect((await api('POST', '/api/invoice-ninja/clients/import')).body).toMatchObject({ created: 0, updated: 0, linked: 0, unchanged: 3 });
+
+    // A change in Invoice Ninja arrives by webhook and is pulled from the API.
+    inClients[1].contacts[0].email = 'bookings@acme.example';
+    const s = await prisma().businessProfile.findUnique({ where: { id: 1 } });
+    const hook = await api('POST', `/api/webhooks/invoice-ninja/${s!.invoiceNinjaWebhookKey}`, { id: 'in-acme', entity_type: 'client', name: 'stale payload' }, { 'x-webhook-secret': s!.webhookSecret! });
+    expect(hook.status).toBe(200);
+    await settle();
+    expect((await api('GET', `/api/clients/${acme.id}`)).body.email).toBe('bookings@acme.example');
+    const events = (await api('GET', '/api/webhook-events?source=invoice-ninja')).body;
+    expect(events[0]).toMatchObject({ event: 'client', processed: true });
+
+    // Linked clients: details are Invoice Ninja's; only notes are editable here.
+    await api('PUT', `/api/clients/${acme.id}`, { type: 'BUSINESS', name: 'Renamed locally', notes: 'Prefers morning load-in' });
+    expect((await api('GET', `/api/clients/${acme.id}`)).body).toMatchObject({ name: 'Acme Events Pty Ltd', notes: 'Prefers morning load-in' });
   });
 
   it('enforces read-only role', async () => {

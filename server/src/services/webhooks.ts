@@ -3,13 +3,21 @@ import { notify } from '../lib/bookings.js';
 import { invoiceNinjaClient } from '../lib/profile.js';
 import { enqueue } from '../jobs/queue.js';
 import { syncInvoice } from './invoicing.js';
+import { syncInClientById } from './clientSync.js';
 
 type DsPayload = {
   event_type?: string;
   data?: { id?: number; submission_id?: number; submission?: { id?: number }; documents?: { name: string; url: string }[]; decline_reason?: string };
 };
 
-type InPayload = { id?: string; entity_type?: string; invoice_id?: string; invoices?: { invoice_id?: string; id?: string }[]; paymentables?: { invoice_id?: string }[] };
+type InPayload = {
+  id?: string; entity_type?: string; invoice_id?: string; client_id?: string; line_items?: unknown[]; contacts?: unknown[]; vat_number?: string;
+  invoices?: { invoice_id?: string; id?: string }[]; paymentables?: { invoice_id?: string }[];
+};
+
+/** Client payloads: entity_type 'client', or client-shaped (contacts, no line items, not linked to a client). */
+export const isInClientPayload = (p: InPayload) =>
+  p.entity_type === 'client' || (!p.entity_type && Array.isArray(p.contacts) && !Array.isArray(p.line_items) && !p.client_id && 'vat_number' in p);
 
 /** Run a stored webhook event, recording attempts and the last error so failures can be replayed from Settings. */
 export async function runWebhookEvent(eventId: string) {
@@ -55,6 +63,7 @@ async function docuseal(body: DsPayload): Promise<string | void> {
 }
 
 async function invoiceNinja(payload: InPayload): Promise<string | void> {
+  if (isInClientPayload(payload)) return payload.id ? syncInClientById(payload.id) : 'Client event without an id';
   const ids = new Set<string>();
   const isPayment = payload.entity_type === 'payment' || !!payload.paymentables || (Array.isArray(payload.invoices) && !payload.invoice_id);
   if (isPayment) {

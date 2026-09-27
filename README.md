@@ -279,8 +279,21 @@ features stay disabled until you connect them in Settings.
   Lines come from what actually went out (departure qty × rate × days), plus
   labour, discount, damage/loss charges and the late fee. They never come from the original
   booking list.
-- **Client sync:** matches an existing IN client by email or ABN (`vat_number`),
-  otherwise creates one, then stores `invoiceNinjaClientId` on the local client.
+- **Clients: Invoice Ninja is the source of truth.**
+  - **Import** (Settings → Invoice Ninja → *Client sync*): *Preview import* shows what will change
+    (new / update / link existing / up to date); *Import* applies it. All active Invoice Ninja
+    clients are brought in. Existing HireStation clients are matched by Invoice Ninja link, then
+    email (any case), then ABN, so nothing is duplicated. Running it again is safe.
+  - **Ongoing sync:** clients created or edited in Invoice Ninja update in HireStation within
+    seconds via the webhook. Invoice Ninja client events are part of *Register webhooks*; if you
+    registered before this feature, click it once more.
+  - **Mapping:** name (falls back to the contact's name), primary contact, email, phone, address.
+    The ABN comes from `vat_number`/`id_number`, and only when it's a valid 11-digit ABN. A client
+    is a *business* if it has an ABN, or a name different from its contact person.
+  - **Linked clients are read-only in HireStation** apart from HireStation's own notes. Edit them in
+    Invoice Ninja. Archived/deleted Invoice Ninja clients are skipped, and nothing is deleted in HireStation.
+  - Clients created in HireStation are created in Invoice Ninja (or matched by email/ABN) on their
+    first invoice, and linked from then on.
 - **Draft vs issued:** "Regenerate draft" updates the IN invoice in place while
   it's still a draft. "Adjust issued invoice" raises a follow-up invoice or a
   credit note for the difference.
@@ -310,7 +323,11 @@ Tested end to end against a real Invoice Ninja 5.13.43:
 - partial payment → *Partial* with the amount paid
 - adjusting after issue created a credit note
 - paying the balance with the credit applied → *Paid*
-- the webhook event IDs (2 invoice created, 4 payment created, 8 invoice updated) match Invoice Ninja's source
+- the webhook event IDs (1/10 client created/updated, 2/8 invoice created/updated, 4 payment
+  created) match Invoice Ninja's source
+- client import: an existing client matched by email and updated, a business with ABN/address
+  created, an archived client skipped, and re-import idempotent. A client edited and one created in
+  Invoice Ninja synced by webhook, and invoicing an imported client reused its Invoice Ninja record
 
 ### Docuseal
 

@@ -5,6 +5,7 @@ import { prisma } from '../lib/db.js';
 import { HttpError, requireRole } from '../lib/auth.js';
 import { enqueue } from '../jobs/queue.js';
 import { audit } from '../lib/audit.js';
+import { isInClientPayload } from '../services/webhooks.js';
 
 export const WEBHOOK_SECRET_HEADER = 'x-webhook-secret';
 
@@ -59,7 +60,7 @@ export async function webhookRoutes(app: FastifyInstance) {
     await verify(req, 'invoiceNinjaWebhookKey');
     const body = (req.body ?? {}) as Record<string, unknown>;
     // Invoice payloads carry entity_type; payment payloads don't, but list their invoices/paymentables.
-    const kind = body.entity_type ?? (Array.isArray(body.paymentables) || (Array.isArray(body.invoices) && !Array.isArray(body.line_items)) ? 'payment' : 'unknown');
+    const kind = body.entity_type ?? (isInClientPayload(body) ? 'client' : Array.isArray(body.paymentables) || (Array.isArray(body.invoices) && !Array.isArray(body.line_items)) ? 'payment' : 'unknown');
     const evt = await prisma.webhookEvent.create({ data: { source: 'invoice-ninja', event: String(kind), payload: body as object } });
     // Processed asynchronously; the worker re-fetches authoritative state from the API.
     await enqueue('webhook.process', { eventId: evt.id }, { jobId: `webhook-${evt.id}` });

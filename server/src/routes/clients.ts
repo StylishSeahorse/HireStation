@@ -38,8 +38,17 @@ export async function clientRoutes(app: FastifyInstance) {
 
   app.post('/api/clients', async (req) => prisma.client.create({ data: clientSchema.parse(req.body) }));
 
-  app.put<{ Params: { id: string } }>('/api/clients/:id', async (req) =>
-    prisma.client.update({ where: { id: req.params.id }, data: clientSchema.parse(req.body) }));
+  app.put<{ Params: { id: string } }>('/api/clients/:id', async (req) => {
+    const existing = await prisma.client.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw new HttpError(404, 'Client not found');
+    // Invoice Ninja is the source of truth for linked clients: only HireStation's own notes are
+    // editable here; details are changed in Invoice Ninja and synced back.
+    if (existing.invoiceNinjaClientId) {
+      const { notes } = z.object({ notes: z.string().optional().nullable() }).parse(req.body);
+      return prisma.client.update({ where: { id: existing.id }, data: { notes: notes ?? null } });
+    }
+    return prisma.client.update({ where: { id: existing.id }, data: clientSchema.parse(req.body) });
+  });
 
   app.delete<{ Params: { id: string } }>('/api/clients/:id', async (req) => {
     if (await prisma.booking.count({ where: { clientId: req.params.id } })) throw new HttpError(409, 'Client has bookings and cannot be deleted');
