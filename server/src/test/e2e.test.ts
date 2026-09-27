@@ -234,6 +234,18 @@ run('end-to-end', () => {
     expect((await api('GET', '/api/auth/me')).status).toBe(200);
   });
 
+  it('marks the session cookie Secure only when the request arrived over HTTPS', async () => {
+    const login = (headers: Record<string, string>) => app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@example.com', password: 'longpassword2' }, headers });
+    const plain = await login({});
+    expect(plain.statusCode).toBe(200);
+    expect(String(plain.headers['set-cookie'])).not.toMatch(/Secure/i); // http by IP on a LAN must still work
+    const proxied = await login({ 'x-forwarded-proto': 'https' }); // from a trusted (loopback) proxy
+    expect(String(proxied.headers['set-cookie'])).toMatch(/Secure/i);
+    expect(proxied.headers['strict-transport-security']).toBeTruthy();
+    const spoofed = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@example.com', password: 'longpassword2' }, headers: { 'x-forwarded-proto': 'https' }, remoteAddress: '203.0.113.9' });
+    expect(String(spoofed.headers['set-cookie'])).not.toMatch(/Secure/i); // untrusted hop can't claim https
+  });
+
   it('throttles repeated failed sign-ins', async () => {
     const attempt = (password: string) => app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@example.com', password }, remoteAddress: '10.9.9.9' });
     for (let i = 0; i < 5; i++) expect((await attempt('wrong-password')).statusCode).toBe(401);

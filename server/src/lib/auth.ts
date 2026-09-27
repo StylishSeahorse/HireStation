@@ -13,7 +13,10 @@ export function startSession(reply: FastifyReply, user: { id: string; sessionVer
   const exp = Date.now() + MAX_AGE_S * 1000;
   reply.setCookie(SESSION_COOKIE, `${user.id}.${user.sessionVersion}.${exp}`, {
     signed: true, httpOnly: true, sameSite: 'lax', path: '/', maxAge: MAX_AGE_S,
-    secure: process.env.NODE_ENV === 'production',
+    // Secure whenever the browser reached us over HTTPS (directly, or via a trusted reverse proxy's
+    // X-Forwarded-Proto). Forcing it in production broke plain-http access by IP on a LAN: browsers
+    // drop Secure cookies on http, so sign-in silently failed.
+    secure: reply.request.protocol === 'https',
   });
 }
 

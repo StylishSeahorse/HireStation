@@ -96,7 +96,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'same-origin');
     if (!reply.hasHeader('X-Frame-Options')) reply.header('X-Frame-Options', 'SAMEORIGIN');
-    if (env.production) reply.header('Strict-Transport-Security', 'max-age=15552000');
+    if (req.protocol === 'https') reply.header('Strict-Transport-Security', 'max-age=15552000');
     const type = String(reply.getHeader('content-type') ?? '');
     if (type.startsWith('text/html') && !reply.hasHeader('Content-Security-Policy')) {
       reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'");

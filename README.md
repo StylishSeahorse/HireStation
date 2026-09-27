@@ -40,9 +40,9 @@ to the browser.
 
 ## Deploy (Docker Compose)
 
-### Choose your stack
+### Step 1: choose your stack
 
-There are two ready-made presets. Pick one, copy it to `.env`, fill in the values, and start:
+There are two ready-made presets:
 
 | Preset | Runs | Invoice Ninja |
 |---|---|---|
@@ -50,10 +50,8 @@ There are two ready-made presets. Pick one, copy it to `.env`, fill in the value
 | **Without Invoice Ninja** (`.env.no-invoiceninja.example`) | HireStation + Docuseal | your **existing** instance |
 
 ```sh
-cp .env.full.example .env               # or: cp .env.no-invoiceninja.example .env
-# edit .env: passwords, SESSION_SECRET, public hostnames (and IN_APP_KEY for the full stack)
-docker compose up -d --build
-docker compose ps                       # everything should show as running
+git clone https://github.com/StylishSeahorse/HireStation.git && cd HireStation
+cp .env.no-invoiceninja.example .env    # or: cp .env.full.example .env
 ```
 
 Each preset sets `COMPOSE_FILE`, so a plain `docker compose …` always uses the right files:
@@ -66,9 +64,90 @@ docker-compose.invoiceninja.yml     + Invoice Ninja: MySQL, PHP app, nginx, back
 
 (`.env.example` alone runs just HireStation, with both integrations external.)
 
+### Step 2: choose how you'll reach it
+
+> ⚠️ **By default the apps only accept connections from the server itself** (`APP_BIND=127.0.0.1`),
+> because they're meant to sit behind a reverse proxy on the same machine. If you browse to
+> `http://<server-ip>:3000` from another computer without changing this, you'll get
+> **"connection refused"**. Pick one of the two options below.
+
+#### Option A: try it on your local network (by IP, plain http)
+
+Good for a first look or testing. Nothing is exposed to the internet unless your router forwards
+the ports. In `.env`, set (replace `192.168.1.50` with your server's LAN IP, which `hostname -I` shows):
+
+```sh
+SESSION_SECRET=<output of: openssl rand -hex 32>
+POSTGRES_PASSWORD=<any strong password>
+DOCUSEAL_DB_PASSWORD=<any strong password>
+
+APP_BIND=0.0.0.0                      # accept connections from other machines
+PUBLIC_URL=http://192.168.1.50:3000
+DOCUSEAL_BIND=0.0.0.0
+DOCUSEAL_HOST=192.168.1.50:3001
+DOCUSEAL_FORCE_SSL=false              # no HTTPS on the LAN; otherwise Docuseal redirects to https://
+
+# Full stack only:
+IN_BIND=0.0.0.0
+IN_URL=http://192.168.1.50:3002
+IN_REQUIRE_HTTPS=false
+IN_APP_KEY=<output of: docker run --rm invoiceninja/invoiceninja-debian php artisan key:generate --show>
+IN_DB_PASSWORD=<password>  IN_DB_ROOT_PASSWORD=<password>  IN_USER_EMAIL=<you>  IN_PASSWORD=<password>
+```
+
+Then open `http://192.168.1.50:3000` (HireStation), `http://192.168.1.50:3001` (Docuseal) and,
+for the full stack, `http://192.168.1.50:3002` (Invoice Ninja).
+
+What doesn't work on a plain LAN setup:
+- **Invoice Ninja webhooks:** Invoice Ninja refuses webhook URLs on private IPs, so *Register
+  webhooks* is refused. Invoices still generate; only automatic Sent/Partial/Paid updates need it.
+- **Signing links for clients outside your network:** Docuseal's emailed links point at
+  `DOCUSEAL_HOST`, which only works inside your LAN.
+
+`0.0.0.0` is the *bind* setting ("listen on every network interface"). It isn't an address you
+browse to. Use the server's real IP in the browser.
+
+#### Option B: production (your domains, HTTPS via a reverse proxy)
+
+Keep `APP_BIND=127.0.0.1` (the default) and let your reverse proxy (Caddy, nginx, Traefik…) on
+the same server handle HTTPS and forward to the local ports. See *Reverse proxy and public
+hostnames* below and the examples in `deploy/`. Set the public addresses:
+
+```sh
+PUBLIC_URL=https://hire.example.com
+DOCUSEAL_HOST=sign.example.com          # DOCUSEAL_FORCE_SSL=true (default)
+IN_URL=https://invoices.example.com     # full stack only
+```
+
+If your reverse proxy runs in **another container or on another machine**, bind to an address
+it can reach instead of `127.0.0.1`, and set `TRUST_PROXY` to its address (see `deploy/README.md`).
+
+### Step 3: start it
+
+```sh
+docker compose up -d --build
+docker compose ps        # wait until app (and docuseal, in-app) show "healthy"
+```
+
+The first build takes a few minutes. The full stack's first start takes another 1–2 minutes while
+Invoice Ninja sets up its database. Then open HireStation. It should show the setup wizard.
+
 Upgrades: `git pull && docker compose up -d --build`. Migrations for all three apps run
 automatically on start. Invoice Ninja and Docuseal are pinned (`IN_VERSION`, `DOCUSEAL_VERSION`);
 bump them deliberately.
+
+### Troubleshooting
+
+| Symptom | Likely cause and fix |
+|---|---|
+| **"Connection refused"** from another computer | Ports are bound to `127.0.0.1` (the default). Use *Option A* (`APP_BIND=0.0.0.0` etc.), or go through your reverse proxy. Check with `docker compose ps`: the PORTS column should show `0.0.0.0:3000->3000` for LAN access. |
+| "Connection refused" even on the server itself (`curl http://127.0.0.1:3000`) | The app isn't running or is still starting. Run `docker compose ps` and `docker compose logs app`. |
+| Works on the server, still refused from other machines after Option A | A host firewall. Allow the ports, e.g. `sudo ufw allow 3000,3001/tcp` (add `3002` for the full stack). |
+| Docuseal redirects to `https://…` and fails | `DOCUSEAL_FORCE_SSL=false` is needed without HTTPS. Run `docker compose up -d` again after changing `.env`. |
+| Invoice Ninja redirects to `https://…` | Set `IN_REQUIRE_HTTPS=false` for plain http. |
+| Changed `.env` but nothing changed | Re-run `docker compose up -d`. A plain `restart` doesn't re-read `.env`. |
+| `docker compose` errors with "required variable … is missing a value" | That setting is empty in `.env`. The message names it. |
+| Setup wizard never appears / blank page | `docker compose logs app`. On first boot the app runs migrations before listening. |
 
 ### Reverse proxy and public hostnames
 
