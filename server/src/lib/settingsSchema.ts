@@ -69,6 +69,21 @@ export const localeSchema = z.object({
   contractReminderDays: z.coerce.number().int().min(1).max(60).default(3),
 });
 
+const optText = z.string().trim().max(200).optional().nullable().transform((v) => (v ? v : null));
+const optInt = z.union([z.coerce.number().int().min(0).max(365), z.literal(''), z.null()]).optional().transform((v) => (v === '' || v == null ? null : v));
+
+/** Standard terms merged into hire agreements (the same on every booking). */
+export const termsSchema = z.object({
+  termsLateReturnFee: optText,        // e.g. "$50 per day"
+  termsExtensionNotice: optText,      // e.g. "24 hours"
+  termsLatePaymentPct: optText,       // e.g. "2"
+  termsBondRefundDays: optInt,        // business days
+  termsCancelDepositDays: optInt,     // cancel more than N days before: deposit forfeited, rest refunded
+  termsCancelLateDays: optInt,        // cancel within N days …
+  termsCancelLatePct: z.union([z.coerce.number().int().min(0).max(100), z.literal(''), z.null()]).optional().transform((v) => (v === '' || v == null ? null : v)), // … P% payable
+  termsBalanceDue: optText,           // e.g. "Invoiced after the event"
+});
+
 export const sections = {
   identity: identitySchema,
   tax: taxSchema,
@@ -77,6 +92,7 @@ export const sections = {
   invoiceNinja: invoiceNinjaSchema,
   docuseal: docusealSchema,
   locale: localeSchema,
+  terms: termsSchema,
 } as const;
 export type SectionName = keyof typeof sections;
 

@@ -57,7 +57,7 @@ export function BookingForm() {
   const staffQ = useQuery({ queryKey: ['staff'], queryFn: () => api('/staff') });
   const [step, setStep] = useState(0);
   const [newClient, setNewClient] = useState(false);
-  const [v, setV] = useState<any>({ title: '', clientId: params.get('clientId') ?? '', venue: '', venueAddress: '', loadIn: '', eventStart: '', eventEnd: '', loadOut: '', notes: '', status: 'ENQUIRY', discountPercent: 0, bondAmount: 0, lineItems: [], staff: [] });
+  const [v, setV] = useState<any>({ title: '', clientId: params.get('clientId') ?? '', venue: '', venueAddress: '', loadIn: '', eventStart: '', eventEnd: '', loadOut: '', notes: '', status: 'ENQUIRY', discountPercent: 0, bondAmount: 0, deliveryFee: 0, depositAmount: 0, lineItems: [], staff: [] });
   const [eqFilter, setEqFilter] = useState('');
 
   useEffect(() => {
@@ -66,8 +66,8 @@ export function BookingForm() {
     setV({
       title: b.title, clientId: b.clientId, venue: b.venue ?? '', venueAddress: b.venueAddress ?? '', notes: b.notes ?? '', status: b.status,
       loadIn: toLocalInput(b.loadIn, tz), loadOut: toLocalInput(b.loadOut, tz), eventStart: toLocalInput(b.eventStart, tz), eventEnd: toLocalInput(b.eventEnd, tz),
-      discountPercent: Number(b.discountPercent), bondAmount: Number(b.bondAmount),
-      lineItems: b.lineItems.map((l: any) => ({ equipmentId: l.equipmentId, qtyBooked: l.qtyBooked, dailyRate: Number(l.dailyRate) })),
+      discountPercent: Number(b.discountPercent), bondAmount: Number(b.bondAmount), deliveryFee: Number(b.deliveryFee), depositAmount: Number(b.depositAmount),
+      lineItems: b.lineItems.map((l: any) => ({ equipmentId: l.equipmentId, qtyBooked: l.qtyBooked, dailyRate: Number(l.dailyRate), conditionNote: l.conditionNote ?? '' })),
       staff: b.staff.map((s: any) => ({ staffId: s.staffId, role: s.role, rate: s.rate ?? '', hours: s.hours ?? '' })),
     });
   }, [existing.data, tz]);
@@ -101,9 +101,10 @@ export function BookingForm() {
     });
     const labour = v.staff.reduce((a: number, s: any) => a + Number(s.rate || 0) * Number(s.hours || 0), 0);
     const disc = Number(v.discountPercent || 0) / 100;
-    const sub = (taxable + exempt) * (1 - disc) + labour;
-    const gst = ((taxable * (1 - disc)) + labour) * gstRate / 100;
-    return { rows, labour, discount: (taxable + exempt) * disc, sub, gst, total: sub + gst };
+    const delivery = Number(v.deliveryFee || 0);
+    const sub = (taxable + exempt) * (1 - disc) + labour + delivery;
+    const gst = ((taxable * (1 - disc)) + labour + delivery) * gstRate / 100;
+    return { rows, labour, delivery, discount: (taxable + exempt) * disc, sub, gst, total: sub + gst };
   }, [v, days, settings, equipment.data]);
 
   const save = useMutate(() => api(id ? `/bookings/${id}` : '/bookings', {
@@ -120,6 +121,8 @@ export function BookingForm() {
     setV({ ...v, lineItems: qty > 0 ? [...others, { ...(cur ?? { equipmentId: eid }), qtyBooked: qty }] : others });
   };
   const qtyOf = (eid: string) => v.lineItems.find((l: any) => l.equipmentId === eid)?.qtyBooked ?? 0;
+  const setCondition = (eid: string, conditionNote: string) =>
+    setV({ ...v, lineItems: v.lineItems.map((l: any) => (l.equipmentId === eid ? { ...l, conditionNote } : l)) });
   const conflicts = v.lineItems.filter((l: any) => { const a = avail.get(l.equipmentId); return a && l.qtyBooked > a.available; });
 
   const canNext = [!!v.clientId, !!v.title && !!range.loadIn && !!range.loadOut && range.loadOut! > range.loadIn!, true, v.staff.every((s: any) => s.staffId && s.role), true][step];
@@ -164,7 +167,7 @@ export function BookingForm() {
           <div className="space-y-3">
             {!range.loadIn && <Alert tone="amber">Set dates first to see availability.</Alert>}
             <Input placeholder="Filter equipment" value={eqFilter} onChange={(e) => setEqFilter(e.target.value)} className="max-w-xs" />
-            <Table head={['Item', 'Rate/day', 'Available', 'Qty']}>
+            <Table head={['Item', 'Rate/day', 'Available', 'Qty', 'Condition on hire']}>
               {equipment.data?.filter((e: any) => !eqFilter || e.name.toLowerCase().includes(eqFilter.toLowerCase()) || qtyOf(e.id)).map((e: any) => {
                 const a = avail.get(e.id); const q = qtyOf(e.id);
                 return (
@@ -173,6 +176,7 @@ export function BookingForm() {
                     <Td>{money(e.dailyRate)}</Td>
                     <Td>{a ? <span className={q > a.available ? 'font-semibold text-rose-600' : ''}>{a.available} / {a.stock}</span> : '—'}</Td>
                     <Td><Input type="number" min={0} className="w-20" value={q || ''} onChange={(x) => setLine(e.id, Number(x.target.value))} /></Td>
+                    <Td>{q > 0 && <Input placeholder="Good" className="w-40" value={v.lineItems.find((l: any) => l.equipmentId === e.id)?.conditionNote ?? ''} onChange={(x) => setCondition(e.id, x.target.value)} />}</Td>
                   </tr>
                 );
               })}
@@ -202,6 +206,8 @@ export function BookingForm() {
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label="Discount (%)"><Input type="number" min={0} max={100} value={v.discountPercent} onChange={(e) => setV({ ...v, discountPercent: e.target.value })} /></Field>
               <Field label="Security bond" hint="Held separately — never part of the GST invoice unless forfeited"><Input type="number" min={0} step="0.01" value={v.bondAmount} onChange={(e) => setV({ ...v, bondAmount: e.target.value })} /></Field>
+              <Field label="Delivery / setup / collection fee (ex GST)" hint="Invoiced as its own line"><Input type="number" min={0} step="0.01" value={v.deliveryFee} onChange={(e) => setV({ ...v, deliveryFee: e.target.value })} /></Field>
+              <Field label="Deposit (optional)" hint="Shown on the agreement, e.g. to cover fuel. 0 = none"><Input type="number" min={0} step="0.01" value={v.depositAmount} onChange={(e) => setV({ ...v, depositAmount: e.target.value })} /></Field>
               <div className="pt-6 text-sm text-slate-500">{days} hire day{days === 1 ? '' : 's'}</div>
             </div>
             <Table head={['Item', 'Qty', 'Rate', 'Total']}>
@@ -210,6 +216,7 @@ export function BookingForm() {
             <dl className="ml-auto max-w-xs space-y-1 text-sm">
               {summary.labour > 0 && <div className="flex justify-between"><dt>Labour</dt><dd>{money(summary.labour)}</dd></div>}
               {summary.discount > 0 && <div className="flex justify-between"><dt>Discount</dt><dd>−{money(summary.discount)}</dd></div>}
+              {summary.delivery > 0 && <div className="flex justify-between"><dt>Delivery / setup</dt><dd>{money(summary.delivery)}</dd></div>}
               <div className="flex justify-between"><dt>Subtotal</dt><dd>{money(summary.sub)}</dd></div>
               {settings?.gstRegistered && <div className="flex justify-between"><dt>GST ({Number(settings.gstRate)}%)</dt><dd>{money(summary.gst)}</dd></div>}
               <div className="flex justify-between border-t pt-1 font-semibold"><dt>Total</dt><dd>{money(summary.total)}</dd></div>

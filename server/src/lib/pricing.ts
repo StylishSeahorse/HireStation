@@ -7,7 +7,7 @@ export interface PricedLine {
   unitCost: Cents; // GST-exclusive
   days: number;
   taxable: boolean;
-  kind: 'HIRE' | 'DAMAGE' | 'LATE_FEE' | 'BOND_FORFEIT' | 'LABOUR' | 'DISCOUNT';
+  kind: 'HIRE' | 'DAMAGE' | 'LATE_FEE' | 'BOND_FORFEIT' | 'LABOUR' | 'DISCOUNT' | 'DELIVERY';
 }
 
 export interface Totals {
@@ -43,6 +43,7 @@ export interface UsageInput {
   discountPercent: Num;
   bondForfeited: Num; // GST-inclusive amount retained from the bond
   staff?: { name: string; role: string; rate: Num | null; hours: Num | null }[];
+  deliveryFee?: Num; // delivery / setup / collection, ex GST (not discounted)
 }
 
 /**
@@ -84,6 +85,8 @@ export function usageLines(input: UsageInput, tax: TaxSettings): PricedLine[] {
     const label = missing > 0 ? `Loss/damage charge — ${e?.name ?? 'item'} (${missing} not returned)` : `Damage charge — ${e?.name ?? 'item'}`;
     lines.push({ key: `damage:${r.equipmentId}`, description: r.damageNotes ? `${label}: ${r.damageNotes}` : label, quantity: 1, unitCost: charge, days: 1, taxable: true, kind: 'DAMAGE' });
   }
+  const delivery = toCents(input.deliveryFee ?? 0);
+  if (delivery > 0) lines.push({ key: 'delivery', description: 'Delivery, setup and collection', quantity: 1, unitCost: delivery, days: 1, taxable: true, kind: 'DELIVERY' });
   const late = toCents(input.lateFee);
   if (late > 0) lines.push({ key: 'late', description: 'Late return fee', quantity: 1, unitCost: late, days: 1, taxable: true, kind: 'LATE_FEE' });
   const forfeit = toCents(input.bondForfeited);

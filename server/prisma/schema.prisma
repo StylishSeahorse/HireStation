@@ -70,6 +70,15 @@ model BusinessProfile {
   docusealWebhookHmacSecret String?
   // Operational defaults
   contractReminderDays      Int               @default(3)
+  // Standard contract terms merged into hire agreements (Settings → Contract terms).
+  termsLateReturnFee        String?
+  termsExtensionNotice      String?
+  termsLatePaymentPct       String?
+  termsBondRefundDays       Int?
+  termsCancelDepositDays    Int?
+  termsCancelLateDays       Int?
+  termsCancelLatePct        Int?
+  termsBalanceDue           String?
   createdAt                 DateTime          @default(now())
   updatedAt                 DateTime          @updatedAt
 }
@@ -219,6 +228,10 @@ model Booking {
   status           BookingStatus       @default(ENQUIRY)
   notes            String?
   discountPercent  Decimal             @default(0) @db.Decimal(5, 2)
+  // Delivery / setup / collection charge for this booking (ex GST; invoiced as its own line).
+  deliveryFee      Decimal             @default(0) @db.Decimal(10, 2)
+  // Optional non-refundable deposit shown on the agreement (e.g. to cover fuel); 0 = none.
+  depositAmount    Decimal             @default(0) @db.Decimal(10, 2)
   bondAmount       Decimal             @default(0) @db.Decimal(10, 2)
   bondStatus       BondStatus          @default(NONE)
   bondForfeited    Decimal             @default(0) @db.Decimal(10, 2)
@@ -238,15 +251,17 @@ model Booking {
 }
 
 model BookingLineItem {
-  id          String    @id @default(cuid())
-  bookingId   String
-  booking     Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  equipmentId String
-  equipment   Equipment @relation(fields: [equipmentId], references: [id])
-  qtyBooked   Int
+  id            String    @id @default(cuid())
+  bookingId     String
+  booking       Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  equipmentId   String
+  equipment     Equipment @relation(fields: [equipmentId], references: [id])
+  qtyBooked     Int
   // Rate snapshot at booking time so catalog edits don't alter quotes.
-  dailyRate   Decimal   @db.Decimal(10, 2)
-  days        Decimal   @db.Decimal(6, 2)
+  dailyRate     Decimal   @db.Decimal(10, 2)
+  days          Decimal   @db.Decimal(6, 2)
+  // Condition on hire shown on the agreement; blank = "Good".
+  conditionNote String?
 }
 
 model BookingStaff {
@@ -336,6 +351,10 @@ model ContractTemplate {
   versions           ContractTemplateVersion[]
   createdAt          DateTime                  @default(now())
   updatedAt          DateTime                  @updatedAt
+  // For Docuseal templates with fixed equipment rows: rows available per category, and whether
+  // extra items may spill onto an 'equipment overflow' schedule field.
+  equipmentRows      Int?
+  equipmentOverflow  Boolean                   @default(false)
 }
 
 // Immutable once created; editing a template creates a new version, so

@@ -7,6 +7,7 @@ import { docusealClient, requireProfile, taxOf } from '../lib/profile.js';
 import { computeTotals } from '../lib/pricing.js';
 import { fileExists, mimeOf, readStored, saveFile } from '../lib/storage.js';
 import { IntegrationError } from './http.js';
+import { agreementValues, placeEquipment, SECTION_LABEL } from '../lib/agreement.js';
 import { isProOnlyError } from './docuseal.js';
 
 export async function logoDataUri(p: BusinessProfile): Promise<string | null> {
@@ -78,7 +79,11 @@ export async function sendContract(contractId: string) {
   if (mapped) {
     // Mapped mode: the Docuseal template carries the layout; merge values prefill (and lock) its fields.
     const b = await prisma.booking.findUniqueOrThrow({ where: { id: c.bookingId }, include: bookingInclude });
-    const values = mergeValues(b, quoteTotals(b, taxOf(profile)), profile).text;
+    const values = await templateValues(b, c.templateVersion.template, profile);
+    if (c.templateVersion.template.equipmentOverflow) {
+      // Cosmetic only: a failure here must not stop the contract going out.
+      await ds.topAlignField(Number(mapped), 'equipment overflow').catch(() => undefined);
+    }
     res = await ds.submitTemplate({ templateId: Number(mapped), signer, values, message });
   } else {
     // Pro edition: this app's merged, branded HTML is the document that gets signed.
@@ -99,6 +104,46 @@ export async function sendContract(contractId: string) {
   await prisma.booking.update({ where: { id: c.bookingId }, data: { status: 'CONTRACT_SENT' } });
   await notify('contract', `Contract sent to ${email} for ${c.booking.reference}`, c.bookingId);
   return updated;
+}
+
+/**
+ * Values for a mapped Docuseal template: generic merge fields, the hire-agreement fields, and (for
+ * templates with fixed equipment rows) the equipment placed into its rows. Throws if the booking
+ * doesn't fit a template without an overflow schedule, suggesting a bigger template.
+ */
+export async function templateValues(b: FullBooking, t: { id: string; name: string; equipmentRows: number | null; equipmentOverflow: boolean }, profile: BusinessProfile) {
+  const totals = quoteTotals(b, taxOf(profile));
+  const values: Record<string, string> = { ...mergeValues(b, totals, profile).text, ...agreementValues(b, totals, profile) };
+  if (t.equipmentRows) {
+    const placed = placeEquipment(b.lineItems, t.equipmentRows);
+    if (placed.overflow.length && !t.equipmentOverflow) await throwDoesNotFit(t, placed.overLimit);
+    Object.assign(values, placed.values);
+  }
+  return values;
+}
+
+async function throwDoesNotFit(t: { id: string; name: string; equipmentRows: number | null }, overLimit: Record<string, number | undefined>) {
+  const detail = Object.entries(overLimit).filter(([, n]) => n).map(([k, n]) => k === 'uncategorised'
+    ? `${n} uncategorised item${n === 1 ? '' : 's'}`
+    : `${n} ${SECTION_LABEL[k as keyof typeof SECTION_LABEL]} item${n === 1 ? '' : 's'} too many`).join(', ');
+  const bigger = await prisma.contractTemplate.findFirst({
+    where: { archived: false, id: { not: t.id }, docusealTemplateId: { not: null }, OR: [{ equipmentRows: { gt: t.equipmentRows ?? 0 } }, { equipmentOverflow: true }] },
+    orderBy: { equipmentRows: 'desc' },
+  });
+  const uncategorised = overLimit.uncategorised
+    ? ' Items without a Sound / Lighting / Visual / Cables / Staging category can only go on an overflow schedule — or set their category.'
+    : '';
+  throw new HttpError(412, `This booking's equipment doesn't fit "${t.name}" (${t.equipmentRows} rows per category; ${detail}).` +
+    (bigger ? ` Use "${bigger.name}" instead.` : ' Use a template with more rows or an overflow schedule.') + uncategorised);
+}
+
+/** Request-time check (before queueing a send) so the user sees the problem immediately. */
+export async function assertFits(bookingId: string, templateId: string) {
+  const t = await prisma.contractTemplate.findUnique({ where: { id: templateId } });
+  if (!t?.equipmentRows || t.equipmentOverflow) return;
+  const b = await prisma.booking.findUniqueOrThrow({ where: { id: bookingId }, include: bookingInclude });
+  const placed = placeEquipment(b.lineItems, t.equipmentRows);
+  if (placed.overflow.length) await throwDoesNotFit(t, placed.overLimit);
 }
 
 export const FREE_EDITION_MESSAGE =

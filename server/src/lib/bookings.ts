@@ -6,7 +6,16 @@ import { toCents } from './money.js';
 
 export const bookingInclude = {
   client: true,
-  lineItems: { include: { equipment: { select: { id: true, name: true, gstTaxable: true, serialised: true, sku: true } } } },
+  lineItems: {
+    include: {
+      equipment: {
+        select: {
+          id: true, name: true, gstTaxable: true, serialised: true, sku: true, replacementValue: true,
+          category: { select: { name: true, parent: { select: { name: true } } } },
+        },
+      },
+    },
+  },
   staff: { include: { staff: { select: { id: true, name: true, email: true } } } },
   departure: { include: { lines: true } },
   returnInventory: { include: { lines: true } },
@@ -33,7 +42,7 @@ export function quoteLines(b: FullBooking): PricedLine[] {
     equipment: b.lineItems.map((l) => l.equipment),
     returnLines: b.lineItems.map((l) => ({ equipmentId: l.equipmentId, qtyOut: l.qtyBooked, qtyReturned: l.qtyBooked, dailyRate: l.dailyRate, days: l.days, damageCharge: 0 })),
     staff: b.staff.map((s) => ({ name: s.staff.name, role: s.role, rate: s.rate, hours: s.hours })),
-    lateFee: 0, discountPercent: b.discountPercent, bondForfeited: 0,
+    lateFee: 0, discountPercent: b.discountPercent, bondForfeited: 0, deliveryFee: b.deliveryFee,
   }, { gstRegistered: false, gstRate: 0 });
 }
 
@@ -52,6 +61,7 @@ export async function usageTotals(b: FullBooking, tax: TaxSettings) {
     returnLines: b.returnInventory.lines,
     staff: b.staff.map((s) => ({ name: s.staff.name, role: s.role, rate: s.rate, hours: s.hours })),
     lateFee: b.returnInventory.lateFee,
+    deliveryFee: b.deliveryFee,
     discountPercent: b.discountPercent,
     bondForfeited: b.bondForfeited,
   }, tax);

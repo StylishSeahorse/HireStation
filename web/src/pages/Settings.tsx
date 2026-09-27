@@ -7,11 +7,11 @@ import { useMutate } from '@/lib/useMutate';
 import { useMe, useSettings } from '@/lib/hooks';
 import { useFormat } from '@/lib/format';
 import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td } from '@/components/ui';
-import { BankingForm, BrandingForm, clean, Draft, DocusealForm, IdentityForm, InvoiceNinjaForm, LocaleForm, TaxForm } from '@/components/SettingsForms';
+import { BankingForm, BrandingForm, clean, Draft, DocusealForm, IdentityForm, InvoiceNinjaForm, LocaleForm, TaxForm, TermsForm } from '@/components/SettingsForms';
 
 const SECTIONS = [
   ['identity', 'Business identity'], ['tax', 'Tax'], ['banking', 'Banking'], ['branding', 'Branding'],
-  ['invoiceNinja', 'Invoice Ninja'], ['docuseal', 'Docuseal'], ['locale', 'Locale & defaults'], ['users', 'Users'],
+  ['invoiceNinja', 'Invoice Ninja'], ['docuseal', 'Docuseal'], ['locale', 'Locale & defaults'], ['terms', 'Contract terms'], ['users', 'Users'],
   ['webhooks', 'Webhook log'], ['audit', 'Audit log'], ['account', 'My account'],
 ] as const;
 
@@ -23,6 +23,7 @@ const FIELDS: Record<string, string[]> = {
   invoiceNinja: ['invoiceNinjaUrl', 'invoiceNinjaCompanyId'],
   docuseal: ['docusealUrl', 'docusealEdition'],
   locale: ['timezone', 'currency', 'dateFormat', 'holidayRegion', 'contractReminderDays'],
+  terms: ['termsLateReturnFee', 'termsExtensionNotice', 'termsLatePaymentPct', 'termsBondRefundDays', 'termsCancelDepositDays', 'termsCancelLateDays', 'termsCancelLatePct', 'termsBalanceDue'],
 };
 
 export default function SettingsPage() {
@@ -71,6 +72,7 @@ function Section({ name }: { name: string }) {
         {name === 'invoiceNinja' && <InvoiceNinjaForm {...props} hasToken={s.hasInvoiceNinjaToken} />}
         {name === 'docuseal' && <DocusealForm {...props} hasToken={s.hasDocusealToken} hasHmacSecret={s.hasDocusealWebhookHmacSecret} />}
         {name === 'locale' && <LocaleForm {...props} />}
+        {name === 'terms' && <TermsForm {...props} />}
         <div className="mt-4 flex items-center gap-3 border-t pt-4">
           <Button onClick={() => save.mutate(undefined)} loading={save.isPending}>Save</Button>
           {save.isSuccess && <span className="text-sm text-emerald-700">Saved</span>}

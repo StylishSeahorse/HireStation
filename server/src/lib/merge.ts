@@ -3,11 +3,12 @@ import { formatAbn } from './au.js';
 import { formatDate, formatDateTime } from './dates.js';
 import { fromCents } from './money.js';
 import type { Totals } from './pricing.js';
+import { agreementValues } from './agreement.js';
 
 export const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
 /** The catalogue of merge fields shown in the editor. */
-export const MERGE_FIELDS: { key: string; label: string; group: 'Client' | 'Event' | 'Pricing' | 'Business' | 'Signing' }[] = [
+export const MERGE_FIELDS: { key: string; label: string; group: 'Client' | 'Event' | 'Pricing' | 'Business' | 'Terms' | 'Signing' }[] = [
   { key: 'client_name', label: 'Client name', group: 'Client' },
   { key: 'client_contact', label: 'Client contact person', group: 'Client' },
   { key: 'client_email', label: 'Client email', group: 'Client' },
@@ -41,6 +42,16 @@ export const MERGE_FIELDS: { key: string; label: string; group: 'Client' | 'Even
   { key: 'gst_rate', label: 'GST rate', group: 'Business' },
   { key: 'signatory_name', label: 'Signatory name', group: 'Business' },
   { key: 'signatory_title', label: 'Signatory title', group: 'Business' },
+  { key: 'fee_delivery', label: 'Delivery / setup fee', group: 'Pricing' },
+  { key: 'fee_deposit', label: 'Deposit', group: 'Pricing' },
+  { key: 'late_return_fee', label: 'Late return fee', group: 'Terms' },
+  { key: 'extension_notice', label: 'Extension notice', group: 'Terms' },
+  { key: 'late_payment_pct', label: 'Late payment interest (%/month)', group: 'Terms' },
+  { key: 'bond_refund_days', label: 'Bond refund (business days)', group: 'Terms' },
+  { key: 'cancel_more_days', label: 'Cancellation: deposit-only days', group: 'Terms' },
+  { key: 'cancel_within_days', label: 'Cancellation: late days', group: 'Terms' },
+  { key: 'cancel_within_pct', label: 'Cancellation: late % payable', group: 'Terms' },
+  { key: 'fee_balance_due', label: 'Balance due', group: 'Terms' },
   { key: 'today', label: "Today's date", group: 'Signing' },
   { key: 'client_signature', label: 'Client signature box', group: 'Signing' },
   { key: 'client_signed_date', label: 'Client signing date', group: 'Signing' },
@@ -91,6 +102,8 @@ export function mergeValues(b: MergeBooking, totals: Totals, p: BusinessProfile)
     client_signature: '<signature-field name="Client Signature" role="Client" required="true" style="display:inline-block;width:240px;height:70px;"></signature-field>',
     client_signed_date: '<date-field name="Signed Date" role="Client" required="true" style="display:inline-block;width:160px;height:24px;"></date-field>',
   };
+  // Hire-agreement fields (parties, fees, standard terms) are available to HTML templates too.
+  Object.assign(text, agreementValues(b, totals, p));
   return { text, html };
 }
 

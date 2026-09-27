@@ -65,6 +65,21 @@ export class Docuseal {
     return parseSubmission(res);
   }
 
+  /**
+   * Top-align a (tall) text field so its text starts at the top of the box. PDF import can't carry
+   * vertical alignment, and Docuseal centres by default. Returns false when there's no such field.
+   */
+  async topAlignField(templateId: number, fieldName: string): Promise<boolean> {
+    const t = await this.req<{ fields?: { name?: string; preferences?: Record<string, unknown> }[] }>('GET', `/templates/${templateId}`);
+    const fields = t.fields ?? [];
+    const f = fields.find((x) => x.name?.toLowerCase() === fieldName.toLowerCase());
+    if (!f) return false;
+    if (f.preferences?.valign === 'top') return true;
+    f.preferences = { ...f.preferences, valign: 'top' };
+    await this.req('PUT', `/templates/${templateId}`, { fields });
+    return true;
+  }
+
   async getDocuments(submissionId: number | string): Promise<{ name: string; url: string }[]> {
     const res = await this.req<{ documents?: { name: string; url: string }[] }>('GET', `/submissions/${submissionId}/documents?merge=true`);
     return res.documents ?? [];

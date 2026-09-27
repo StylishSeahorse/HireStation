@@ -82,7 +82,7 @@ export function TemplateEditor() {
   const clauses = useQuery({ queryKey: ['clauses'], queryFn: () => api('/clauses') });
   const dsTemplates = useQuery({ queryKey: ['ds-templates'], queryFn: () => api('/docuseal/templates'), enabled: me?.role === 'ADMIN' && !!s?.hasDocusealToken, retry: false });
   const bookings = useQuery({ queryKey: ['bookings', '', ''], queryFn: () => api('/bookings') });
-  const [meta, setMeta] = useState({ name: '', description: '', docusealTemplateId: '' });
+  const [meta, setMeta] = useState<{ name: string; description: string; docusealTemplateId: string; equipmentRows: string | number; equipmentOverflow: boolean }>({ name: '', description: '', docusealTemplateId: '', equipmentRows: '', equipmentOverflow: false });
   const [preview, setPreview] = useState<string | null>(null);
   const [previewBooking, setPreviewBooking] = useState('');
   const [previewErr, setPreviewErr] = useState('');
@@ -90,11 +90,11 @@ export function TemplateEditor() {
 
   useEffect(() => {
     if (!t.data || !editor) return;
-    setMeta({ name: t.data.name, description: t.data.description ?? '', docusealTemplateId: t.data.docusealTemplateId ?? '' });
+    setMeta({ name: t.data.name, description: t.data.description ?? '', docusealTemplateId: t.data.docusealTemplateId ?? '', equipmentRows: t.data.equipmentRows ?? '', equipmentOverflow: !!t.data.equipmentOverflow });
     editor.commands.setContent(t.data.content);
   }, [t.data, editor]);
 
-  const save = useMutate(() => api(`/templates/${id}`, { method: 'PUT', body: { ...meta, content: editor!.getHTML() } }), [['template', id], ['templates']]);
+  const save = useMutate(() => api(`/templates/${id}`, { method: 'PUT', body: { ...meta, equipmentRows: meta.equipmentRows === '' ? null : Number(meta.equipmentRows), content: editor!.getHTML() } }), [['template', id], ['templates']]);
   const del = useMutate(() => api(`/templates/${id}`, { method: 'DELETE' }), [['templates']], () => nav('/contracts'));
 
   const runPreview = async () => {
@@ -138,6 +138,19 @@ export function TemplateEditor() {
                 ) : <Input value={meta.docusealTemplateId} disabled={ro} placeholder="Docuseal template ID" onChange={(e) => setMeta({ ...meta, docusealTemplateId: e.target.value })} />}
               </Field>
             </div>
+            {meta.docusealTemplateId && (
+              <div className="mt-3 grid gap-3 border-t pt-3 sm:grid-cols-3">
+                <Field label="Equipment rows per category" hint="For fixed-layout agreements (Sound / Lighting / Visual / Cables / Staging). Blank if the Docuseal template has no equipment rows.">
+                  <Input type="number" min={1} max={10} value={meta.equipmentRows} disabled={ro} onChange={(e) => setMeta({ ...meta, equipmentRows: e.target.value })} className="max-w-24" />
+                </Field>
+                <div className="pt-6 sm:col-span-2">
+                  <label className="inline-flex items-center gap-2 font-normal">
+                    <input type="checkbox" disabled={ro} checked={meta.equipmentOverflow} onChange={(e) => setMeta({ ...meta, equipmentOverflow: e.target.checked })} />
+                    Has an overflow schedule (Schedule A). Extra or uncategorised items go there instead of blocking the send.
+                  </label>
+                </div>
+              </div>
+            )}
             {meta.docusealTemplateId && <p className="mt-2 text-xs text-slate-500">Mapped mode: Docuseal’s template provides the layout, and its fields named after merge keys (e.g. <code>client_name</code>, <code>equipment_list</code>) are prefilled from the booking and locked.</p>}
             {!meta.docusealTemplateId && s?.docusealEdition === 'free' && (
               <div className="mt-2"><Alert tone="amber">Your Docuseal is the free edition, so this template can’t be sent for signing until it’s mapped to a Docuseal template. You can still generate and preview contracts.</Alert></div>

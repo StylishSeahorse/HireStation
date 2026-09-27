@@ -209,6 +209,25 @@ export function LocaleForm(p: FormProps) {
   );
 }
 
+export function TermsForm(p: FormProps) {
+  const v = p.value;
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <p className="text-sm text-slate-500 sm:col-span-2">Your standard terms, filled into every hire agreement (and available as merge fields). Leave blank to leave the field empty.</p>
+      <Field label="Late return fee" hint="e.g. $50 per day"><Input value={v.termsLateReturnFee ?? ''} onChange={set(p, 'termsLateReturnFee')} /></Field>
+      <Field label="Extension notice required" hint="e.g. 24 hours"><Input value={v.termsExtensionNotice ?? ''} onChange={set(p, 'termsExtensionNotice')} /></Field>
+      <Field label="Late payment interest (% per month)"><Input value={v.termsLatePaymentPct ?? ''} onChange={set(p, 'termsLatePaymentPct')} className="max-w-32" /></Field>
+      <Field label="Bond refunded within (business days)"><Input type="number" min={0} value={v.termsBondRefundDays ?? ''} onChange={set(p, 'termsBondRefundDays')} className="max-w-32" /></Field>
+      <Field label="Cancel more than … days before the event" hint="Deposit forfeited, rest refunded"><Input type="number" min={0} value={v.termsCancelDepositDays ?? ''} onChange={set(p, 'termsCancelDepositDays')} className="max-w-32" /></Field>
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Cancel within … days"><Input type="number" min={0} value={v.termsCancelLateDays ?? ''} onChange={set(p, 'termsCancelLateDays')} /></Field>
+        <Field label="… % of hire fee payable"><Input type="number" min={0} max={100} value={v.termsCancelLatePct ?? ''} onChange={set(p, 'termsCancelLatePct')} /></Field>
+      </div>
+      <Field label="Balance due" hint="e.g. Invoiced after the event" className="sm:col-span-2"><Input value={v.termsBalanceDue ?? ''} onChange={set(p, 'termsBalanceDue')} /></Field>
+    </div>
+  );
+}
+
 export const LOCALE_DEFAULTS = { timezone: 'Australia/Brisbane', currency: 'AUD', dateFormat: 'DD/MM/YYYY', holidayRegion: '', contractReminderDays: 3 };
 export const TAX_DEFAULTS = { gstRegistered: true, gstRate: 10 };
 

@@ -23,11 +23,14 @@ const bookingSchema = z.object({
   notes: z.string().optional().nullable(),
   discountPercent: z.coerce.number().min(0).max(100).default(0),
   bondAmount: money.default(0),
+  deliveryFee: money.default(0),
+  depositAmount: money.default(0),
   lineItems: z.array(z.object({
     equipmentId: z.string(),
     qtyBooked: z.coerce.number().int().min(1),
     dailyRate: money.optional(), // defaults to catalog rate
     days: z.coerce.number().positive().optional(), // defaults to booking hire days
+    conditionNote: z.string().trim().max(120).optional().nullable().transform((v) => v || null), // blank = "Good"
   })).default([]),
   staff: z.array(z.object({
     staffId: z.string(), role: z.string().min(1),
@@ -44,7 +47,7 @@ async function lineData(input: BookingInput) {
   const rates = new Map(eq.map((e) => [e.id, e.dailyRate]));
   return input.lineItems.map((l) => {
     if (!rates.has(l.equipmentId)) throw new HttpError(400, `Unknown equipment ${l.equipmentId}`);
-    return { equipmentId: l.equipmentId, qtyBooked: l.qtyBooked, dailyRate: l.dailyRate ?? rates.get(l.equipmentId)!, days: l.days ?? days };
+    return { equipmentId: l.equipmentId, qtyBooked: l.qtyBooked, dailyRate: l.dailyRate ?? rates.get(l.equipmentId)!, days: l.days ?? days, conditionNote: l.conditionNote ?? null };
   });
 }
 
@@ -145,8 +148,9 @@ export async function bookingRoutes(app: FastifyInstance) {
         venue: src.venue, venueAddress: src.venueAddress, notes: src.notes,
         loadIn: mv(src.loadIn)!, loadOut: mv(src.loadOut)!, eventStart: mv(src.eventStart), eventEnd: mv(src.eventEnd),
         discountPercent: src.discountPercent, bondAmount: src.bondAmount, bondStatus: Number(src.bondAmount) > 0 ? 'HELD' : 'NONE',
+        deliveryFee: src.deliveryFee, depositAmount: src.depositAmount,
         duplicatedFromId: src.id,
-        lineItems: { create: src.lineItems.map(({ equipmentId, qtyBooked, dailyRate, days }) => ({ equipmentId, qtyBooked, dailyRate, days })) },
+        lineItems: { create: src.lineItems.map(({ equipmentId, qtyBooked, dailyRate, days, conditionNote }) => ({ equipmentId, qtyBooked, dailyRate, days, conditionNote })) },
         staff: { create: src.staff.map(({ staffId, role, rate, hours }) => ({ staffId, role, rate, hours })) },
       },
     });

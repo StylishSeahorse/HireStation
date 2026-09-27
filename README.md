@@ -375,21 +375,61 @@ You do **not** create a Docuseal template per booking. Build it once and reuse i
 Create another template only for a genuinely different *kind* of agreement, e.g. one each
 for dry hire, full production with staff, and DJ booth bookings.
 
-**Line items:** the equipment goes into one multi-line field, `equipment_list`, one line per
-item (e.g. `2 × Line array speaker (2 days) — $720.00`). The field is a fixed-size box on
-your template, so:
+**Line items:** there are two ways to put equipment on a template.
 
-- size it for your longest typical booking
-- very long lists (say 30+ items) may overflow or shrink the text. If large productions are
-  common, keep a second template with a bigger equipment area, or one with the list on its
-  own page
+- **Free-form list:** one multi-line field, `equipment_list`, one line per item
+  (e.g. `2 × Line array speaker (2 days) — $720.00`). It is a fixed-size box, so size it for
+  your longest typical booking.
+- **Fixed rows per category** (below): a table with a set number of rows for each category, filled item by item.
 
-If that becomes a real limitation, there are two ways out:
-- **Docuseal Pro:** HireStation sends its own contract, whose equipment table grows with the booking.
-- **Code change:** HireStation could generate a separate equipment-schedule PDF per booking,
-  which the signed agreement refers to (not built yet).
+#### Hire-agreement templates with fixed equipment rows
 
-## Feature map
+A typical agreement lists the equipment in a table grouped by category, followed by
+the fees, the terms and the signatures. HireStation can fill that kind of template field by field.
+
+**Field names.** Name the Docuseal fields as below. In a fillable PDF, use spaces
+instead of underscores, because Docuseal's PDF import drops names containing `_`. It
+matches `event name` to `event_name` on its own.
+
+| Group | Fields |
+|---|---|
+| Equipment rows | `equipment {section} {NN} {item\|qty\|cond\|val}`. `section` is `sound`, `lighting`, `visual`, `cables` or `staging`; `NN` is `01`, `02`, …; `cond` is the condition on hire (default "Good"); `val` is the replacement value × qty |
+| Overflow schedule | `equipment overflow`, one line per extra item, on an attached "Schedule A" page |
+| Parties | `owner business name`, `owner abn`, `owner address`, `owner phone`, `owner email`, `hirer name`, `hirer abn`, `hirer address`, `hirer phone`, `hirer email` |
+| Event | `event name`, `event date`, `venue address`, `bumpin datetime`, `bumpout datetime`, `event times` |
+| Fees | `fee hire excl gst`, `fee gst`, `fee delivery`, `fee bond`, `fee deposit` ("Nil" when zero), `fee balance due`, `payment details` |
+| Terms | `late return fee`, `extension notice`, `late payment pct`, `bond refund days`, `cancel more days`, `cancel within days`, `cancel within pct` |
+| Owner signs in advance | `owner sig signature`, `owner sig print name`, `owner sig date`, `owner sig position`. These are filled from the signatory in Settings, so only the client signs |
+| Client | a **signature** field (e.g. `hirer signature`), plus `hirer sig date` and `hirer sig print name` for the client to complete |
+
+Every value HireStation sends is locked read-only. Rows it doesn't use are sent blank, so they're locked too.
+
+**Where the numbers come from:**
+
+- *Settings → Contract terms*: late return fee, extension notice, late payment interest,
+  bond refund days, the cancellation windows, and the balance-due wording
+  (e.g. "Invoiced after the event").
+- *The booking*: the **Delivery fee** (one amount per booking; it's taxable and added to the invoice),
+  the **Deposit** (normally 0, shown as "Nil"), the bond, and each line's **Condition on hire**.
+- *The equipment*: the replacement value, and its category. Items are placed by the name of their
+  category or its parent. Keywords are checked in this order:
+  cables ("cable", "lead", "loom"), staging ("stage", "truss", "riser", "deck"),
+  lighting ("light", "fixture", "DMX", "haze"), visual ("video", "screen", "LED wall", "projector"),
+  sound ("sound", "audio", "speaker", "PA", "mic", "mixer", "DJ"). Anything else
+  counts as uncategorised. Naming your categories Sound, Lighting, Visual, Cables and Staging is simplest.
+
+**Rows and overflow.** On each HireStation contract template that is mapped to one of these, set
+**Equipment rows per category** (e.g. 3 for a compact agreement, 10 for a large one),
+and tick **Overflow schedule** if the Docuseal template has the `equipment overflow` page.
+
+- If a booking doesn't fit a template without overflow, *Generate & send* refuses and names the
+  bigger mapped template to use instead. For example: "1 Sound item too many — use
+  'Hire with setup and delivery (10 per category)'".
+- On a template with overflow, items beyond the rows (and uncategorised items) go onto the schedule.
+- HireStation top-aligns the schedule field in Docuseal when it sends, because PDF import can't set
+  vertical alignment.
+
+## Feature map## Feature map
 
 - **Equipment:** categories/sub-categories, tags, photos, daily rate,
   replacement value, per-item GST treatment, stock quantity or serialised units
@@ -533,7 +573,7 @@ is the first place to look.
 
 - Public-holiday surcharge pricing: the region is captured in settings, but no
   surcharge rules exist yet.
-- On Docuseal's free edition, the equipment list is a fixed-size text field (see
-  *One template, many bookings*). A per-booking equipment-schedule PDF isn't built yet.
+- On Docuseal's free edition, equipment goes into fixed-size fields: a list box, or rows plus
+  an overflow schedule page (see *Hire-agreement templates with fixed equipment rows*).
 - Invoice Ninja tokens are company-scoped. The company picker records which
   company you intend, so use a token issued for that company.

@@ -311,6 +311,51 @@ run('end-to-end', () => {
     expect((await api('GET', `/api/clients/${acme.id}`)).body).toMatchObject({ name: 'Acme Events Pty Ltd', notes: 'Prefers morning load-in' });
   });
 
+  it('fills fixed-layout hire agreements and suggests the bigger template when equipment does not fit', async () => {
+    expect((await api('PUT', '/api/settings/terms', { termsLateReturnFee: '$50 per day', termsExtensionNotice: '24 hours', termsLatePaymentPct: '2',
+      termsBondRefundDays: 5, termsCancelDepositDays: 3, termsCancelLateDays: 1, termsCancelLatePct: 25, termsBalanceDue: 'Invoiced after the event' })).status).toBe(200);
+    await api('PUT', '/api/settings/docuseal', { docusealUrl: `${mock.url}/ds`, docusealEdition: 'free' });
+    const sound = (await api('POST', '/api/categories', { name: 'Sound' })).body;
+    const cables = (await api('POST', '/api/categories', { name: 'Cables' })).body;
+    const items = [];
+    for (let i = 1; i <= 4; i++) items.push((await api('POST', '/api/equipment', { name: `Speaker ${i}`, dailyRate: 50, stockQuantity: 5, categoryId: sound.id, replacementValue: 1000 })).body);
+    const cable = (await api('POST', '/api/equipment', { name: 'XLR 10m', dailyRate: 2, stockQuantity: 50, categoryId: cables.id, replacementValue: 30 })).body;
+    const client = (await api('POST', '/api/clients', { type: 'INDIVIDUAL', name: 'Agreement Client', email: 'agree@example.com' })).body;
+    const bk = (await api('POST', '/api/bookings', {
+      title: 'Wedding', clientId: client.id, venue: 'Hall', venueAddress: '1 Road', loadIn: '2031-02-01T06:00:00Z', loadOut: '2031-02-01T14:00:00Z',
+      eventStart: '2031-02-01T08:00:00Z', eventEnd: '2031-02-01T13:00:00Z', status: 'CONFIRMED', bondAmount: 300, deliveryFee: 120,
+      lineItems: [...items.map((e: any) => ({ equipmentId: e.id, qtyBooked: 1 })), { equipmentId: cable.id, qtyBooked: 6, conditionNote: 'New' }],
+    })).body;
+    expect(bk.quote.lines.some((l: any) => l.kind === 'DELIVERY')).toBe(true);
+    const small = (await api('POST', '/api/templates', { name: 'Hire with setup and delivery', docusealTemplateId: '101', equipmentRows: 3 })).body;
+    const big = (await api('POST', '/api/templates', { name: 'Hire with setup and delivery (10 per category)', docusealTemplateId: '102', equipmentRows: 10, equipmentOverflow: true })).body;
+
+    const refused = await api('POST', `/api/bookings/${bk.id}/contracts`, { templateId: small.id, send: true });
+    expect(refused.status).toBe(412);
+    expect(refused.body.error).toMatch(/1 Sound item too many/);
+    expect(refused.body.error).toMatch(/Hire with setup and delivery \(10 per category\)/);
+
+    const before = calls.length;
+    expect((await api('POST', `/api/bookings/${bk.id}/contracts`, { templateId: big.id, send: true })).status).toBe(200);
+    await settle();
+    const call = calls.slice(before).find((x) => x.url === '/ds/api/submissions' && x.body?.template_id === 102);
+    const v = call!.body.submitters[0].values;
+    expect(v).toMatchObject({
+      owner_business_name: 'Test Biz Pty Ltd', owner_abn: '51 824 753 556', hirer_name: 'Agreement Client', event_name: 'Wedding', venue_address: 'Hall, 1 Road',
+      equipment_sound_04_item: 'Speaker 4', equipment_sound_04_val: '1,000.00', equipment_sound_05_item: '',
+      equipment_cables_01_item: 'XLR 10m', equipment_cables_01_qty: '6', equipment_cables_01_cond: 'New', equipment_cables_01_val: '180.00',
+      equipment_overflow: 'None', fee_delivery: '120.00', fee_bond: '300.00', fee_deposit: 'Nil',
+      late_return_fee: '$50 per day', extension_notice: '24 hours', late_payment_pct: '2', bond_refund_days: '5',
+      cancel_more_days: '3', cancel_within_days: '1', cancel_within_pct: '25', fee_balance_due: 'Invoiced after the event',
+      owner_sig_print_name: 'Test Biz Pty Ltd',
+    });
+    expect(v.fee_hire_excl_gst).toBe('212.00'); // 4 x $50 + 6 x $2, one day; delivery is shown separately
+    expect(v.fee_gst).toBe('33.20');             // 10% of (212 + 120 delivery)
+    // Everything HireStation fills is locked; the client only signs, dates and prints their name.
+    expect(call!.body.submitters[0].readonly_fields).toEqual(expect.arrayContaining(['equipment_sound_05_item', 'owner_sig_signature', 'fee_gst']));
+    expect(call!.body.submitters[0].readonly_fields).not.toContain('hirer_sig_print_name');
+  });
+
   it('enforces read-only role', async () => {
     const ro = (await api('POST', '/api/users', { name: 'RO', email: 'ro@example.com', password: 'longpassword1', role: 'READ_ONLY' })).body;
     const adminCookie = cookie;
