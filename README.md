@@ -148,6 +148,21 @@ bump them deliberately.
 | Changed `.env` but nothing changed | Re-run `docker compose up -d`. A plain `restart` doesn't re-read `.env`. |
 | `docker compose` errors with "required variable … is missing a value" | That setting is empty in `.env`. The message names it. |
 | Setup wizard never appears / blank page | `docker compose logs app`. On first boot the app runs migrations before listening. |
+| App keeps restarting; `docker compose logs app` shows **`P1000: Authentication failed against database server`** | You changed `POSTGRES_PASSWORD` (or `DOCUSEAL_DB_PASSWORD` / `IN_DB_PASSWORD`) after the first start. Databases only take the password from `.env` when their volume is first created, so the old one is still in effect. With no data to keep, **start over** (below). Otherwise change it back, or change it inside the database too. |
+
+### Starting over from scratch
+
+To wipe everything and start fresh, e.g. after changing passwords before you've entered real data:
+
+```sh
+docker compose down -v        # stops everything and DELETES all volumes: databases, uploads, Docuseal and Invoice Ninja data
+docker compose up -d --build
+```
+
+⚠️ `-v` permanently deletes all app data (bookings, clients, contracts, invoices in the bundled
+Invoice Ninja). Only do this on a fresh install, or after taking a backup (see *Backups*). Files
+already written to `BACKUP_PATH` on the host are kept. Delete that folder too for a completely
+clean slate.
 
 ### Reverse proxy and public hostnames
 
