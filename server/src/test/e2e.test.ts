@@ -356,6 +356,39 @@ run('end-to-end', () => {
     expect(call!.body.submitters[0].readonly_fields).not.toContain('hirer_sig_print_name');
   });
 
+  it('assigns unique barcodes and looks them up for scanning', async () => {
+    // Items created earlier in this run got codes on creation; the next ones follow on.
+    const before = (await api('GET', '/api/barcodes')).body as { code: string }[];
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.every((c) => /^EQ\d{5}$/.test(c.code))).toBe(true);
+    const mixer = (await api('POST', '/api/equipment', { name: 'Mixer', dailyRate: 80, serialised: true })).body;
+    expect(mixer.barcode).toMatch(/^EQ\d{5}$/);
+    const u1 = (await api('POST', `/api/equipment/${mixer.id}/units`, { serialNumber: 'SN1' })).body;
+    const u2 = (await api('POST', `/api/equipment/${mixer.id}/units`, { serialNumber: 'SN2', barcode: ' asset-77 ' })).body;
+    expect(u1.barcode).toBe(`${mixer.barcode}-01`);
+    expect(u2.barcode).toBe('ASSET-77'); // typed codes are kept, trimmed and uppercased
+
+    // A code means one thing: products and units can't share one.
+    const clash = await api('POST', '/api/equipment', { name: 'Other', dailyRate: 1, barcode: 'asset-77' });
+    expect(clash.status).toBe(409);
+    expect(clash.body.error).toMatch(/Mixer \(unit SN2\)/);
+    expect((await api('PATCH', `/api/units/${u1.id}`, { barcode: mixer.barcode })).status).toBe(409);
+
+    // Cleared codes are filled in again by "Assign barcodes"; existing ones are left alone.
+    await api('PATCH', `/api/units/${u1.id}`, { barcode: null });
+    const gen = await api('POST', '/api/equipment/barcodes/generate', {});
+    expect(gen.body).toEqual({ products: 0, units: 1 });
+    const codes = (await api('GET', '/api/barcodes')).body as { code: string; unitId: string | null; name: string }[];
+    expect(codes.find((c) => c.unitId === u1.id)?.code).toBe(`${mixer.barcode}-01`);
+    expect(codes.find((c) => c.code === 'ASSET-77')?.name).toBe('Mixer #SN2');
+    expect(new Set(codes.map((c) => c.code)).size).toBe(codes.length);
+
+    // Scanning into the search box finds the item, by product or unit code.
+    expect((await api('GET', '/api/search?q=asset-77')).body.equipment.map((e: { id: string }) => e.id)).toEqual([mixer.id]);
+    expect((await api('GET', `/api/equipment?q=${mixer.barcode}`)).body.map((e: { id: string }) => e.id)).toEqual([mixer.id]);
+    expect((await api('POST', '/api/equipment', { name: 'Bad', dailyRate: 1, barcode: 'caf\u00e9' })).status).toBe(400);
+  });
+
   it('enforces read-only role', async () => {
     const ro = (await api('POST', '/api/users', { name: 'RO', email: 'ro@example.com', password: 'longpassword1', role: 'READ_ONLY' })).body;
     const adminCookie = cookie;

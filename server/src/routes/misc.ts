@@ -15,7 +15,7 @@ export async function miscRoutes(app: FastifyInstance) {
     if (q.length < 2) return { equipment: [], clients: [], bookings: [] };
     const ci = { contains: q, mode: 'insensitive' as const };
     const [equipment, clients, bookings] = await Promise.all([
-      prisma.equipment.findMany({ where: { archived: false, OR: [{ name: ci }, { sku: ci }, { tags: { has: q.toLowerCase() } }] }, take: 8, select: { id: true, name: true, sku: true } }),
+      prisma.equipment.findMany({ where: { archived: false, OR: [{ name: ci }, { sku: ci }, { barcode: q.toUpperCase() }, { units: { some: { barcode: q.toUpperCase() } } }, { tags: { has: q.toLowerCase() } }] }, take: 8, select: { id: true, name: true, sku: true } }),
       prisma.client.findMany({ where: { OR: [{ name: ci }, { email: ci }, { contactName: ci }] }, take: 8, select: { id: true, name: true, email: true } }),
       prisma.booking.findMany({ where: { OR: [{ title: ci }, { reference: ci }, { venue: ci }, { client: { name: ci } }] }, take: 8, orderBy: { loadIn: 'desc' }, select: { id: true, reference: true, title: true, loadIn: true, status: true } }),
     ]);

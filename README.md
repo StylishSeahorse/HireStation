@@ -429,7 +429,7 @@ and tick **Overflow schedule** if the Docuseal template has the `equipment overf
 - HireStation top-aligns the schedule field in Docuseal when it sends, because PDF import can't set
   vertical alignment.
 
-## Feature map## Feature map
+## Feature map
 
 - **Equipment:** categories/sub-categories, tags, photos, daily rate,
   replacement value, per-item GST treatment, stock quantity or serialised units
@@ -441,6 +441,8 @@ and tick **Overflow schedule** if the Docuseal template has the `equipment overf
 - **Checklists:** departure (adjust quantities, add items used on the day, pick
   serial units) and return (qty returned, condition, damage notes/charges, a
   "use replacement value" shortcut, late flag + fee). Admins can amend a completed return.
+- **Barcodes:** every item gets a code, and units of serialised items get their own. Labels
+  print on A4 sheets or a label printer, and checklists can be counted by scanning (see *Barcodes and scanning*).
 - **Bonds:** held / refunded / partially / fully forfeited, and refund
   instructions that quote the business bank details.
 - **Contracts:** TipTap editor, merge-field palette, drag-and-drop clause
@@ -450,6 +452,53 @@ and tick **Overflow schedule** if the Docuseal template has the `equipment overf
 - **Reports:** revenue by month (ex GST / GST / paid), equipment utilisation,
   outstanding bonds. The dashboard shows the week ahead, overdue returns, unsigned contracts
   and outstanding invoices.
+
+## Barcodes and scanning
+
+**Codes.** New equipment gets a barcode when it's created: `EQ00001`, `EQ00002`, …
+Units of a serialised item get the item's code plus a number (`EQ00002-01`, `-02`, …).
+
+- **Existing gear:** *Equipment → Barcode labels → Assign barcodes* fills in every item that
+  doesn't have a code.
+- **Your own codes:** if gear already carries an asset tag or manufacturer barcode, type that
+  code into the item's (or unit's) Barcode field instead.
+- Codes are stored in capitals and must be unique across items and units, so a scan always means one thing.
+- Scanning into the global search box (or the Equipment filter) jumps to the item.
+
+**Labels.** *Equipment → Barcode labels* prints Code 128 labels, which every scanner and phone camera can read.
+
+- **Copies:** by default you get one label per physical item: as many as the stock quantity
+  for counted items such as cables, and one per unit for serialised items. Change the copies per row as needed.
+- **Layouts:**
+  - A4 sheets of 65 (38.1 × 21.2 mm, e.g. L7651) or 24 (63.5 × 33.9 mm, e.g. L7159).
+    "Skip used labels" lets you reuse a part-used sheet.
+  - A label printer, one label per page at a size you set.
+- **Printing:** print at 100% scale with headers and footers off.
+  - On a 203 dpi thermal printer, use labels at least 50 mm wide.
+  - For cables, wrap-around or laminated self-wrap labels last longest.
+
+**Scanning.** On a booking's *Checklists* tab, press **Scan items out** (departure) or
+**Scan items back** (return). Every quantity starts at 0 and goes up one per scan. Rows turn
+green when complete, amber while short and red if over. Save or complete the checklist as usual.
+
+- **USB or Bluetooth scanner:** any scanner that acts as a keyboard works. Click into the scan
+  box and scan; each code ends with Enter.
+- **Phone or tablet camera:** press *Camera*. This needs HireStation opened over **HTTPS**
+  (see Option B); browsers block the camera on plain http, except on `localhost`. A label is
+  counted once while it stays in view, so move to the next item.
+- **Mistakes caught:**
+  - unknown codes
+  - a serialised unit scanned twice
+  - more scanned back than went out (usually a double scan)
+  - items that weren't on the hire
+  - retired units
+  - Each scan beeps, and on phones it vibrates: a short beep if OK, a low buzz if not.
+- **Departure:** scanning an item that wasn't booked adds it, the same as *Add an item used on the day*.
+- **Return:** short rows list the serial numbers not yet scanned back, and short quantities are
+  recorded as lost when the return is completed, as before.
+- **Exact tracking:** identical items such as cables share one code, so the scan counts them
+  but can't tell two scans of the same cable apart. Where that matters, make the item
+  serialised and label each unit.
 
 ## Security
 
