@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/db.js';
 import { HttpError } from '../lib/auth.js';
 import { allocations } from '../lib/availability.js';
+import { assertBarcodeFree, generateMissingBarcodes, normaliseBarcode } from '../lib/barcodes.js';
 import { saveFile, fileExists, openFile, mimeOf, removeFile } from '../lib/storage.js';
 
 const money = z.coerce.number().min(0).multipleOf(0.01);
@@ -10,6 +11,7 @@ const money = z.coerce.number().min(0).multipleOf(0.01);
 const equipmentSchema = z.object({
   name: z.string().trim().min(1),
   sku: z.string().trim().optional().nullable().transform((v) => v || null),
+  barcode: z.string().nullable().transform(normaliseBarcode).optional(),
   description: z.string().optional().nullable(),
   categoryId: z.string().optional().nullable().transform((v) => v || null),
   tags: z.array(z.string().trim().min(1)).default([]),
@@ -23,6 +25,7 @@ const equipmentSchema = z.object({
 
 const unitSchema = z.object({
   serialNumber: z.string().trim().min(1),
+  barcode: z.string().nullable().transform(normaliseBarcode).optional(),
   condition: z.enum(['GOOD', 'FAIR', 'DAMAGED', 'IN_REPAIR']).default('GOOD'),
   conditionNotes: z.string().optional().nullable(),
   retired: z.boolean().optional(),
@@ -57,7 +60,7 @@ export async function equipmentRoutes(app: FastifyInstance) {
       where: {
         archived: archived === 'true',
         ...(categoryId ? { categoryId } : {}),
-        ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { sku: { contains: q, mode: 'insensitive' } }, { tags: { has: q.toLowerCase() } }] } : {}),
+        ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { sku: { contains: q, mode: 'insensitive' } }, { barcode: q.trim().toUpperCase() }, { units: { some: { barcode: q.trim().toUpperCase() } } }, { tags: { has: q.toLowerCase() } }] } : {}),
       },
       include: { category: true, _count: { select: { units: { where: { retired: false } } } } },
       orderBy: { name: 'asc' },
@@ -77,11 +80,16 @@ export async function equipmentRoutes(app: FastifyInstance) {
 
   app.post('/api/equipment', async (req) => {
     const body = equipmentSchema.parse(req.body);
-    return prisma.equipment.create({ data: { ...body, tags: body.tags.map((t) => t.toLowerCase()) } });
+    await assertBarcodeFree(prisma, body.barcode);
+    const e = await prisma.equipment.create({ data: { ...body, tags: body.tags.map((t) => t.toLowerCase()) } });
+    // New items get a barcode straight away unless one was typed in.
+    if (!e.barcode) await generateMissingBarcodes(prisma, [e.id]);
+    return prisma.equipment.findUniqueOrThrow({ where: { id: e.id } });
   });
 
   app.put<{ Params: { id: string } }>('/api/equipment/:id', async (req) => {
     const body = equipmentSchema.parse(req.body);
+    await assertBarcodeFree(prisma, body.barcode, { equipmentId: req.params.id });
     return prisma.equipment.update({ where: { id: req.params.id }, data: { ...body, tags: body.tags.map((t) => t.toLowerCase()) } });
   });
 
@@ -130,15 +138,40 @@ export async function equipmentRoutes(app: FastifyInstance) {
   // ---- Units ----
   app.post<{ Params: { id: string } }>('/api/equipment/:id/units', async (req) => {
     const body = unitSchema.parse(req.body);
-    return prisma.equipmentUnit.create({ data: { ...body, equipmentId: req.params.id } });
+    await assertBarcodeFree(prisma, body.barcode);
+    const u = await prisma.equipmentUnit.create({ data: { ...body, equipmentId: req.params.id } });
+    // A unit of an item that's already barcoded gets its own code (EQ00001-01, -02, …).
+    if (!u.barcode && (await prisma.equipment.count({ where: { id: req.params.id, barcode: { not: null } } })))
+      await generateMissingBarcodes(prisma, [req.params.id]);
+    return prisma.equipmentUnit.findUniqueOrThrow({ where: { id: u.id } });
   });
   app.patch<{ Params: { unitId: string } }>('/api/units/:unitId', async (req) => {
     const body = unitSchema.partial().parse(req.body);
+    if (body.barcode !== undefined) await assertBarcodeFree(prisma, body.barcode, { unitId: req.params.unitId });
     return prisma.equipmentUnit.update({ where: { id: req.params.unitId }, data: body });
   });
   app.delete<{ Params: { unitId: string } }>('/api/units/:unitId', async (req) => {
     await prisma.equipmentUnit.delete({ where: { id: req.params.unitId } });
     return { ok: true };
+  });
+
+  // ---- Barcodes ----
+  // Assign generated codes to everything (or the given items) that doesn't have one yet.
+  app.post('/api/equipment/barcodes/generate', async (req) => {
+    const { equipmentIds } = z.object({ equipmentIds: z.array(z.string()).optional() }).parse(req.body ?? {});
+    return prisma.$transaction((tx) => generateMissingBarcodes(tx, equipmentIds), { timeout: 60_000 });
+  });
+
+  // Every code, for instant lookups while scanning (one request, then no round trip per scan).
+  app.get('/api/barcodes', async () => {
+    const [items, units] = await Promise.all([
+      prisma.equipment.findMany({ where: { barcode: { not: null } }, select: { id: true, barcode: true, name: true, archived: true, serialised: true } }),
+      prisma.equipmentUnit.findMany({ where: { barcode: { not: null } }, select: { id: true, barcode: true, serialNumber: true, retired: true, equipmentId: true, equipment: { select: { name: true } } } }),
+    ]);
+    return [
+      ...items.map((e) => ({ code: e.barcode!, equipmentId: e.id, unitId: null, name: e.name, serialised: e.serialised, inactive: e.archived })),
+      ...units.map((u) => ({ code: u.barcode!, equipmentId: u.equipmentId, unitId: u.id, name: `${u.equipment.name} #${u.serialNumber}`, serialised: true, inactive: u.retired })),
+    ];
   });
 
   // ---- Availability ----

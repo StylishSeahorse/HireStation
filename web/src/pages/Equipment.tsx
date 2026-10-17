@@ -1,21 +1,22 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useFormat, toLocalInput, fromLocalInput } from '@/lib/format';
 import { useMutate } from '@/lib/useMutate';
 import { useMe, useSettings } from '@/lib/hooks';
+import { code128Svg } from '@/lib/code128';
 import { Alert, Badge, Button, Card, Checkbox, Field, Input, Modal, PageHeader, Select, Spinner, StatusBadge, Table, Td, Textarea } from '@/components/ui';
 
-const blank = { name: '', sku: '', description: '', categoryId: '', tags: [] as string[], dailyRate: '', replacementValue: '', gstTaxable: true, stockQuantity: 1, serialised: false };
+const blank = { name: '', sku: '', barcode: '', description: '', categoryId: '', tags: [] as string[], dailyRate: '', replacementValue: '', gstTaxable: true, stockQuantity: 1, serialised: false };
 
 function EquipmentForm({ initial, onSaved, onCancel }: { initial?: any; onSaved: (e: any) => void; onCancel: () => void }) {
-  const [v, setV] = useState<any>(() => initial ? { ...blank, ...initial, sku: initial.sku ?? '', categoryId: initial.categoryId ?? '', replacementValue: initial.replacementValue ?? '' } : blank);
+  const [v, setV] = useState<any>(() => initial ? { ...blank, ...initial, sku: initial.sku ?? '', barcode: initial.barcode ?? '', categoryId: initial.categoryId ?? '', replacementValue: initial.replacementValue ?? '' } : blank);
   const [tagText, setTagText] = useState((initial?.tags ?? []).join(', '));
   const cats = useQuery({ queryKey: ['categories'], queryFn: () => api('/categories') });
   const { data: s } = useSettings();
   const [newCat, setNewCat] = useState('');
-  const save = useMutate((body: any) => api(initial ? `/equipment/${initial.id}` : '/equipment', { method: initial ? 'PUT' : 'POST', body }), [['equipment']], onSaved);
+  const save = useMutate((body: any) => api(initial ? `/equipment/${initial.id}` : '/equipment', { method: initial ? 'PUT' : 'POST', body }), [['equipment'], ['barcodes']], onSaved);
   const addCat = useMutate((name: string) => api('/categories', { body: { name } }), [['categories']], (c) => { setV({ ...v, categoryId: c.id }); setNewCat(''); });
   const f = (k: string) => (e: any) => setV({ ...v, [k]: e.target.value });
   return (
@@ -25,6 +26,7 @@ function EquipmentForm({ initial, onSaved, onCancel }: { initial?: any; onSaved:
     }}>
       <Field label="Name" className="sm:col-span-2"><Input value={v.name} onChange={f('name')} required /></Field>
       <Field label="SKU / code"><Input value={v.sku} onChange={f('sku')} /></Field>
+      <Field label="Barcode" hint={initial ? 'Clear it to remove the barcode' : 'Leave blank to generate one, or type the code of a label it already has'}><Input value={v.barcode} onChange={f('barcode')} className="font-mono" /></Field>
       <Field label="Category">
         <div className="flex gap-2">
           <Select value={v.categoryId} onChange={f('categoryId')}>
@@ -67,11 +69,12 @@ export function EquipmentList() {
     <>
       <PageHeader title="Equipment" actions={<>
         <Link to="/equipment/availability"><Button variant="secondary">Availability</Button></Link>
+        <Link to="/equipment/labels"><Button variant="secondary">Barcode labels</Button></Link>
         {me?.role !== 'READ_ONLY' && <Button onClick={() => setCreating(true)}>Add equipment</Button>}
       </>} />
       <Card>
         <div className="mb-3 flex flex-wrap gap-2">
-          <Input placeholder="Filter by name, SKU or tag" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-xs" />
+          <Input placeholder="Filter by name, SKU, barcode or tag" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-xs" />
           <Select value={cat} onChange={(e) => setCat(e.target.value)} className="max-w-48"><option value="">All categories</option>{cats.data?.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select>
           <Checkbox label="Show archived" checked={archived} onChange={setArchived} />
         </div>
@@ -111,7 +114,8 @@ export function EquipmentDetail() {
   const del = useMutate(() => api(`/equipment/${id}`, { method: 'DELETE' }), [['equipment']], () => nav('/equipment'));
   const [unit, setUnit] = useState({ serialNumber: '', condition: 'GOOD', conditionNotes: '' });
   const addUnit = useMutate(() => api(`/equipment/${id}/units`, { body: unit }), [['equipment', id]], () => setUnit({ serialNumber: '', condition: 'GOOD', conditionNotes: '' }));
-  const updUnit = useMutate(({ uid, ...body }: any) => api(`/units/${uid}`, { method: 'PATCH', body }), [['equipment', id]]);
+  const updUnit = useMutate(({ uid, ...body }: any) => api(`/units/${uid}`, { method: 'PATCH', body }), [['equipment', id], ['barcodes']]);
+  const genCodes = useMutate(() => api('/equipment/barcodes/generate', { body: { equipmentIds: [id] } }), [['equipment', id], ['barcodes']]);
   if (isLoading || !e) return <Spinner />;
   return (
     <>
@@ -130,6 +134,14 @@ export function EquipmentDetail() {
           </dl>
           {e.description && <p className="mt-4 whitespace-pre-wrap text-sm text-slate-600">{e.description}</p>}
           <div className="mt-3 flex flex-wrap gap-1">{e.tags.map((t: string) => <Badge key={t}>{t}</Badge>)}</div>
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t pt-4">
+            {e.barcode ? <BarcodeImage code={e.barcode} /> : <span className="text-sm text-slate-400">No barcode</span>}
+            {canEdit && (!e.barcode || (e.serialised && e.units.some((u: any) => !u.barcode && !u.retired))) && (
+              <Button size="sm" variant="secondary" onClick={() => genCodes.mutate(undefined)} loading={genCodes.isPending}>{e.barcode ? 'Generate unit barcodes' : 'Generate barcode'}</Button>
+            )}
+            {e.barcode && <Link to={`/equipment/labels?ids=${e.id}`}><Button size="sm" variant="secondary">Print labels</Button></Link>}
+          </div>
+          {genCodes.error && <Alert>{genCodes.error}</Alert>}
         </Card>
         <Card title="Photos" actions={canEdit && <label className="cursor-pointer text-sm text-brand-accent">Upload<input type="file" multiple accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(x) => x.target.files && upload.mutate(x.target.files)} /></label>}>
           {upload.error && <Alert>{upload.error}</Alert>}
@@ -145,10 +157,11 @@ export function EquipmentDetail() {
         </Card>
         {e.serialised && (
           <Card title="Units" className="lg:col-span-2">
-            <Table head={['Serial', 'Condition', 'Notes', '']}>
+            <Table head={['Serial', 'Barcode', 'Condition', 'Notes', '']}>
               {e.units.map((u: any) => (
                 <tr key={u.id} className={u.retired ? 'opacity-50' : ''}>
                   <Td>{u.serialNumber}</Td>
+                  <Td><Input key={u.barcode ?? ''} defaultValue={u.barcode ?? ''} disabled={!canEdit} className="w-36 font-mono" onBlur={(x) => x.target.value.trim().toUpperCase() !== (u.barcode ?? '') && updUnit.mutate({ uid: u.id, barcode: x.target.value || null })} /></Td>
                   <Td><Select value={u.condition} disabled={!canEdit} onChange={(x) => updUnit.mutate({ uid: u.id, condition: x.target.value })}>{['GOOD', 'FAIR', 'DAMAGED', 'IN_REPAIR'].map((c) => <option key={c}>{c}</option>)}</Select></Td>
                   <Td><Input defaultValue={u.conditionNotes ?? ''} disabled={!canEdit} onBlur={(x) => x.target.value !== (u.conditionNotes ?? '') && updUnit.mutate({ uid: u.id, conditionNotes: x.target.value })} /></Td>
                   <Td>{canEdit && <Button size="sm" variant="ghost" onClick={() => updUnit.mutate({ uid: u.id, retired: !u.retired })}>{u.retired ? 'Reinstate' : 'Retire'}</Button>}</Td>
@@ -210,5 +223,16 @@ export function Availability() {
         </Table>
       </Card>
     </>
+  );
+}
+
+/** The item's own barcode, as printed on its labels. */
+function BarcodeImage({ code }: { code: string }) {
+  const svg = useMemo(() => code128Svg(code), [code]);
+  return (
+    <div className="inline-flex flex-col items-center">
+      <div className="h-12 w-48 [&>svg]:h-full [&>svg]:w-full" dangerouslySetInnerHTML={{ __html: svg }} />
+      <span className="font-mono text-xs">{code}</span>
+    </div>
   );
 }

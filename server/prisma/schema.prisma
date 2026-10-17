@@ -120,6 +120,7 @@ model Equipment {
   id                    String            @id @default(cuid())
   name                  String
   sku                   String?           @unique
+  barcode               String?           @unique
   description           String?
   categoryId            String?
   category              Category?         @relation(fields: [categoryId], references: [id])
@@ -143,6 +144,7 @@ model EquipmentUnit {
   equipmentId    String
   equipment      Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
   serialNumber   String
+  barcode        String?   @unique
   condition      String    @default("GOOD")
   conditionNotes String?
   retired        Boolean   @default(false)

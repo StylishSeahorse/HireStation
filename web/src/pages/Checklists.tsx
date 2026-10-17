@@ -1,10 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useFormat, toLocalInput, fromLocalInput } from '@/lib/format';
 import { useMutate } from '@/lib/useMutate';
 import { useMe, useSettings } from '@/lib/hooks';
 import { Alert, Badge, Button, Card, Field, Input, Select, Table, Td, Textarea } from '@/components/ui';
+import { ScanBox, useBarcodes } from '@/components/Scanner';
+import { scanDeparture, scanReturn } from '@/lib/scan';
+
+// Row colour while scanning: done, still short, or over.
+const scanRow = (have: number, want: number) => have === want ? 'bg-emerald-50' : have > want ? 'bg-rose-50' : 'bg-amber-50';
+
+function ScanSummary({ have, want, lines }: { have: number; want: number; lines: number }) {
+  return <p className="mb-2 text-sm text-slate-600">Scanned <strong>{have}</strong> of {want} item{want === 1 ? '' : 's'}{lines ? `, ${lines} line${lines === 1 ? '' : 's'} still short` : ', all accounted for'}.</p>;
+}
 
 export function Checklists({ booking: b, readOnly }: { booking: any; readOnly: boolean }) {
   return (
@@ -22,6 +31,10 @@ function Departure({ booking: b, readOnly }: { booking: any; readOnly: boolean }
   const [lines, setLines] = useState<any[]>([]);
   const [notes, setNotes] = useState('');
   const [add, setAdd] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const codes = useBarcodes(scanning);
+  const linesRef = useRef(lines);
+  linesRef.current = lines;
   useEffect(() => { if (dep.data) { setLines(dep.data.lines.map((l: any) => ({ ...l }))); setNotes(dep.data.notes ?? ''); } }, [dep.data]);
   const eq = new Map<string, any>((equipment.data ?? []).map((e: any) => [e.id, e]));
   const booked = new Map<string, number>(b.lineItems.map((l: any) => [l.equipmentId, l.qtyBooked]));
@@ -32,15 +45,33 @@ function Departure({ booking: b, readOnly }: { booking: any; readOnly: boolean }
   const save = useMutate((complete: boolean) => api(`/bookings/${b.id}/departure?complete=${complete}`, { method: 'PUT', body: { notes, lines: lines.map(({ equipmentId, qtyOut, unitIds }) => ({ equipmentId, qtyOut: Number(qtyOut), unitIds: unitIds ?? [] })) } }), [['departure', b.id], ['booking', b.id], ['return', b.id]]);
   const done = dep.data?.completed;
   const locked = readOnly || !!b.returnInventory?.completed;
+  const startScan = () => {
+    if (!confirm('Count what goes out by scanning? Every quantity starts at 0 and goes up as you scan.')) return;
+    setLines(lines.map((l) => ({ ...l, qtyOut: 0, unitIds: [] })));
+    setScanning(true);
+  };
+  const onScan = (code: string) => {
+    if (!codes.data) return { tone: 'error' as const, text: 'Still loading barcodes. Scan that one again' };
+    const { lines: next, result } = scanDeparture(linesRef.current, codes.map.get(code), code, booked);
+    linesRef.current = next;
+    setLines(next);
+    return result;
+  };
+  const wantTotal = [...booked.values()].reduce((a, n) => a + n, 0);
+  // Extras over the booked quantity don't count towards the total (they're flagged on their row).
+  const haveTotal = [...booked].reduce((a, [id, n]) => a + Math.min(n, Number(lines.find((l) => l.equipmentId === id)?.qtyOut ?? 0)), 0);
+  const short = [...booked].filter(([id, n]) => Number(lines.find((l) => l.equipmentId === id)?.qtyOut ?? 0) < n).length;
   return (
-    <Card title={<span className="flex items-center gap-2">Departure checklist {done ? <Badge tone="green">Completed {dateTime(dep.data.completedAt)} by {dep.data.completedBy}</Badge> : <Badge tone="amber">Not completed</Badge>}</span>}>
+    <Card actions={!locked && !scanning && <Button size="sm" variant="secondary" onClick={startScan}>Scan items out</Button>} title={<span className="flex items-center gap-2">Departure checklist {done ? <Badge tone="green">Completed {dateTime(dep.data.completedAt)} by {dep.data.completedBy}</Badge> : <Badge tone="amber">Not completed</Badge>}</span>}>
       <p className="mb-3 text-sm text-slate-500">Confirm what actually left the warehouse. Add or remove items used on the day — invoicing follows this record, not the original booking.</p>
+      {scanning && <ScanBox onScan={onScan} onDone={() => setScanning(false)} />}
+      {scanning && <ScanSummary have={haveTotal} want={wantTotal} lines={short} />}
       <Table head={['Item', 'Booked', 'Qty out', 'Units']}>
         {lines.map((l, i) => {
           const e = eq.get(l.equipmentId);
           const u = units.data?.[l.equipmentId] as any[] | undefined;
           return (
-            <tr key={l.equipmentId}>
+            <tr key={l.equipmentId} className={scanning ? scanRow(Number(l.qtyOut), booked.get(l.equipmentId) ?? 0) : ''}>
               <Td className="font-medium">{e?.name ?? '…'}{!booked.has(l.equipmentId) && <Badge tone="blue">added</Badge>}</Td>
               <Td>{booked.get(l.equipmentId) ?? 0}</Td>
               <Td><Input type="number" min={0} className="w-20" disabled={locked} value={l.qtyOut} onChange={(x) => { const n = [...lines]; n[i] = { ...l, qtyOut: x.target.value }; setLines(n); }} /></Td>
@@ -83,6 +114,12 @@ function Return({ booking: b, readOnly }: { booking: any; readOnly: boolean }) {
   const equipment = useQuery({ queryKey: ['equipment', '', '', false], queryFn: () => api('/equipment') });
   const ret = useQuery({ queryKey: ['return', b.id], queryFn: () => api(`/bookings/${b.id}/return`) });
   const [v, setV] = useState<any>(null);
+  const [scanning, setScanning] = useState(false);
+  const codes = useBarcodes(scanning);
+  const vRef = useRef(v);
+  vRef.current = v;
+  const scannedUnits = useRef(new Set<string>());
+  const departedUnits = new Map<string, string[]>((b.departure?.lines ?? []).map((l: any) => [l.equipmentId, l.unitIds ?? []]));
   useEffect(() => { if (ret.data) setV({ ...ret.data, lateFee: Number(ret.data.lateFee), returnedAt: toLocalInput(ret.data.returnedAt, tz), lines: ret.data.lines.map((l: any) => ({ ...l, damageCharge: Number(l.damageCharge) })) }); }, [ret.data, tz]);
   const eq = new Map<string, any>((equipment.data ?? []).map((e: any) => [e.id, e]));
   const save = useMutate((complete: boolean) => api(`/bookings/${b.id}/return?complete=${complete}`, {
@@ -94,12 +131,37 @@ function Return({ booking: b, readOnly }: { booking: any; readOnly: boolean }) {
   const locked = readOnly || (done && !amending);
   const late = v.returnedAt && fromLocalInput(v.returnedAt, tz) > b.loadOut;
   const upd = (i: number, patch: any) => { const n = [...v.lines]; n[i] = { ...n[i], ...patch }; setV({ ...v, lines: n }); };
+  const startScan = () => {
+    if (!confirm('Count the returns by scanning? Every returned quantity starts at 0 and goes up as you scan.')) return;
+    scannedUnits.current = new Set();
+    setV({ ...v, lines: v.lines.map((l: any) => ({ ...l, qtyReturned: 0 })) });
+    setScanning(true);
+  };
+  const onScan = (code: string) => {
+    if (!codes.data) return { tone: 'error' as const, text: 'Still loading barcodes. Scan that one again' };
+    const cur = vRef.current;
+    const { lines, result } = scanReturn(cur.lines, codes.map.get(code), code, { scannedUnits: scannedUnits.current, departedUnits });
+    const next = { ...cur, lines };
+    vRef.current = next;
+    setV(next);
+    return result;
+  };
+  // Serial numbers of departed units not scanned back yet (from their unit barcodes).
+  const unitName = new Map((codes.data ?? []).filter((c) => c.unitId).map((c) => [c.unitId!, c.name.replace(/^.* #/, '')]));
+  const missingUnits = (equipmentId: string) => (departedUnits.get(equipmentId) ?? []).filter((id) => !scannedUnits.current.has(id)).map((id) => unitName.get(id) ?? '?');
+  const outTotal = v.lines.reduce((a: number, l: any) => a + l.qtyOut, 0);
+  const backTotal = v.lines.reduce((a: number, l: any) => a + Number(l.qtyReturned), 0);
+  const shortLines = v.lines.filter((l: any) => Number(l.qtyReturned) < l.qtyOut).length;
   return (
-    <Card title={<span className="flex items-center gap-2">Return checklist {done ? <Badge tone="green">Completed {dateTime(v.completedAt)} by {v.completedBy}</Badge> : <Badge tone="amber">Not completed</Badge>}{v.lateReturn && <Badge tone="red">Late return</Badge>}</span>}>
+    <Card actions={!locked && !scanning && <Button size="sm" variant="secondary" onClick={startScan}>Scan items back</Button>} title={<span className="flex items-center gap-2">Return checklist {done ? <Badge tone="green">Completed {dateTime(v.completedAt)} by {v.completedBy}</Badge> : <Badge tone="amber">Not completed</Badge>}{v.lateReturn && <Badge tone="red">Late return</Badge>}</span>}>
+      {scanning && <ScanBox onScan={onScan} onDone={() => setScanning(false)} />}
+      {scanning && <ScanSummary have={backTotal} want={outTotal} lines={shortLines} />}
       <Table head={['Item', 'Out', 'Returned', 'Condition', 'Damage notes', 'Charge']}>
         {v.lines.map((l: any, i: number) => (
-          <tr key={l.equipmentId} className={Number(l.qtyReturned) < l.qtyOut ? 'bg-rose-50' : ''}>
-            <Td className="font-medium">{eq.get(l.equipmentId)?.name}</Td>
+          <tr key={l.equipmentId} className={scanning ? scanRow(Number(l.qtyReturned), l.qtyOut) : Number(l.qtyReturned) < l.qtyOut ? 'bg-rose-50' : ''}>
+            <Td className="font-medium">{eq.get(l.equipmentId)?.name}
+              {scanning && Number(l.qtyReturned) < l.qtyOut && missingUnits(l.equipmentId).length > 0 && <div className="text-xs font-normal text-amber-700">Not scanned: {missingUnits(l.equipmentId).join(', ')}</div>}
+            </Td>
             <Td>{l.qtyOut}</Td>
             <Td><Input type="number" min={0} max={l.qtyOut} className="w-20" disabled={locked} value={l.qtyReturned} onChange={(e) => upd(i, { qtyReturned: e.target.value })} /></Td>
             <Td><Select value={l.condition} disabled={locked} onChange={(e) => upd(i, { condition: e.target.value })}>{['GOOD', 'FAIR', 'DAMAGED', 'LOST'].map((c) => <option key={c}>{c}</option>)}</Select></Td>

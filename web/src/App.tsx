@@ -17,6 +17,7 @@ const BookingDetail = page(() => import('@/pages/Bookings'), 'BookingDetail');
 const EquipmentList = page(() => import('@/pages/Equipment'), 'EquipmentList');
 const EquipmentDetail = page(() => import('@/pages/Equipment'), 'EquipmentDetail');
 const Availability = page(() => import('@/pages/Equipment'), 'Availability');
+const Labels = page(() => import('@/pages/Labels'), 'default');
 const ClientList = page(() => import('@/pages/Clients'), 'ClientList');
 const ClientDetail = page(() => import('@/pages/Clients'), 'ClientDetail');
 const StaffList = page(() => import('@/pages/Staff'), 'StaffList');
@@ -44,6 +45,9 @@ export default function App() {
   if (loc.pathname === '/setup') return <Navigate to="/" replace />;
   if (me.isLoading) return <Spinner />;
   if (!me.data) return <Suspense fallback={<Spinner />}><Login /></Suspense>;
+
+  // Label sheets print without the app's navigation around them.
+  if (loc.pathname === '/equipment/labels') return <Suspense fallback={<Spinner />}><Labels /></Suspense>;
 
   return (
     <Layout>
