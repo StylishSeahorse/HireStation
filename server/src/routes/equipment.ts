@@ -20,6 +20,8 @@ const equipmentSchema = z.object({
   gstTaxable: z.boolean().default(true),
   stockQuantity: z.coerce.number().int().min(0).default(0),
   serialised: z.boolean().default(false),
+  // Serialised items: make sure at least this many active units exist (never removes any).
+  unitCount: z.coerce.number().int().min(0).max(500).optional(),
   archived: z.boolean().optional(),
 });
 
@@ -79,18 +81,21 @@ export async function equipmentRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/equipment', async (req) => {
-    const body = equipmentSchema.parse(req.body);
+    const { unitCount, ...body } = equipmentSchema.parse(req.body);
     await assertBarcodeFree(prisma, body.barcode);
     const e = await prisma.equipment.create({ data: { ...body, tags: body.tags.map((t) => t.toLowerCase()) } });
     // New items get a barcode straight away unless one was typed in.
-    if (!e.barcode) await generateMissingBarcodes(prisma, [e.id]);
+    if (e.serialised && unitCount) await ensureUnits(e.id, unitCount);
+    if (!e.barcode || (e.serialised && unitCount)) await generateMissingBarcodes(prisma, [e.id]);
     return prisma.equipment.findUniqueOrThrow({ where: { id: e.id } });
   });
 
   app.put<{ Params: { id: string } }>('/api/equipment/:id', async (req) => {
-    const body = equipmentSchema.parse(req.body);
+    const { unitCount, ...body } = equipmentSchema.parse(req.body);
     await assertBarcodeFree(prisma, body.barcode, { equipmentId: req.params.id });
-    return prisma.equipment.update({ where: { id: req.params.id }, data: { ...body, tags: body.tags.map((t) => t.toLowerCase()) } });
+    const e = await prisma.equipment.update({ where: { id: req.params.id }, data: { ...body, tags: body.tags.map((t) => t.toLowerCase()) } });
+    if (e.serialised && unitCount && (await ensureUnits(e.id, unitCount)) && e.barcode) await generateMissingBarcodes(prisma, [e.id]);
+    return e;
   });
 
   app.delete<{ Params: { id: string } }>('/api/equipment/:id', async (req) => {
@@ -180,4 +185,19 @@ export async function equipmentRoutes(app: FastifyInstance) {
     const alloc = await allocations(start, end, { excludeBookingId: req.query.excludeBookingId });
     return [...alloc.values()];
   });
+}
+
+/** Add numbered units (001, 002, …) until the item has `count` active ones. Returns how many were added. */
+async function ensureUnits(equipmentId: string, count: number) {
+  const units = await prisma.equipmentUnit.findMany({ where: { equipmentId }, select: { serialNumber: true, retired: true } });
+  const taken = new Set(units.map((u) => u.serialNumber));
+  let missing = count - units.filter((u) => !u.retired).length;
+  let added = 0;
+  for (let n = 1; missing > 0; n++) {
+    const serial = String(n).padStart(3, '0');
+    if (taken.has(serial)) continue;
+    await prisma.equipmentUnit.create({ data: { equipmentId, serialNumber: serial } });
+    missing--; added++;
+  }
+  return added;
 }

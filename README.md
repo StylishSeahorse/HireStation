@@ -457,6 +457,8 @@ and tick **Overflow schedule** if the Docuseal template has the `equipment overf
 
 **Codes.** New equipment gets a barcode when it's created: `EQ00001`, `EQ00002`, …
 Units of a serialised item get the item's code plus a number (`EQ00002-01`, `-02`, …).
+For a serialised item, set **Number of units** in its form and HireStation creates the units
+(numbered 001, 002, …, each with its own barcode). Rename them to real serial numbers on the item page if you like.
 
 - **Existing gear:** *Equipment → Barcode labels → Assign barcodes* fills in every item that
   doesn't have a code.

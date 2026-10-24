@@ -19,10 +19,11 @@ function EquipmentForm({ initial, onSaved, onCancel }: { initial?: any; onSaved:
   const save = useMutate((body: any) => api(initial ? `/equipment/${initial.id}` : '/equipment', { method: initial ? 'PUT' : 'POST', body }), [['equipment'], ['barcodes']], onSaved);
   const addCat = useMutate((name: string) => api('/categories', { body: { name } }), [['categories']], (c) => { setV({ ...v, categoryId: c.id }); setNewCat(''); });
   const f = (k: string) => (e: any) => setV({ ...v, [k]: e.target.value });
+  const activeUnits = (initial?.units ?? []).filter((u: any) => !u.retired).length;
   return (
     <form className="grid gap-4 sm:grid-cols-2" onSubmit={(e) => {
       e.preventDefault();
-      save.mutate({ ...v, replacementValue: v.replacementValue === '' ? null : v.replacementValue, tags: tagText.split(',').map((t: string) => t.trim()).filter(Boolean) });
+      save.mutate({ ...v, unitCount: v.serialised ? Number(v.unitCount ?? activeUnits) || undefined : undefined, units: undefined, upcoming: undefined, replacementValue: v.replacementValue === '' ? null : v.replacementValue, tags: tagText.split(',').map((t: string) => t.trim()).filter(Boolean) });
     }}>
       <Field label="Name" className="sm:col-span-2"><Input value={v.name} onChange={f('name')} required /></Field>
       <Field label="SKU / code"><Input value={v.sku} onChange={f('sku')} /></Field>
@@ -41,7 +42,11 @@ function EquipmentForm({ initial, onSaved, onCancel }: { initial?: any; onSaved:
       <Field label="Replacement value"><Input type="number" step="0.01" min="0" value={v.replacementValue} onChange={f('replacementValue')} /></Field>
       <div className="space-y-2">
         <Checkbox label="Serialised (track individual units)" checked={v.serialised} onChange={(c) => setV({ ...v, serialised: c })} />
-        {!v.serialised && <Field label="Stock quantity"><Input type="number" min="0" value={v.stockQuantity} onChange={f('stockQuantity')} /></Field>}
+        {v.serialised ? (
+          <Field label="Number of units" hint={`Units are numbered 001, 002, … each with its own barcode. Add real serial numbers on the item page${activeUnits ? '; lowering this never removes units (retire them instead)' : ''}.`}>
+            <Input type="number" min={activeUnits} max={500} value={v.unitCount ?? activeUnits} onChange={f('unitCount')} />
+          </Field>
+        ) : <Field label="Stock quantity"><Input type="number" min="0" value={v.stockQuantity} onChange={f('stockQuantity')} /></Field>}
       </div>
       <div>
         <Checkbox label="GST taxable" checked={v.gstTaxable} onChange={(c) => setV({ ...v, gstTaxable: c })} />

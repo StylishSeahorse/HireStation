@@ -389,6 +389,17 @@ run('end-to-end', () => {
     expect((await api('POST', '/api/equipment', { name: 'Bad', dailyRate: 1, barcode: 'caf\u00e9' })).status).toBe(400);
   });
 
+  it('creates numbered, barcoded units from a unit count on serialised items', async () => {
+    const amp = (await api('POST', '/api/equipment', { name: 'Amp', dailyRate: 30, serialised: true, unitCount: 3 })).body;
+    let units = (await api('GET', `/api/equipment/${amp.id}`)).body.units;
+    expect(units.map((u: { serialNumber: string; barcode: string }) => [u.serialNumber, u.barcode])).toEqual([['001', `${amp.barcode}-01`], ['002', `${amp.barcode}-02`], ['003', `${amp.barcode}-03`]]);
+    await api('PUT', `/api/equipment/${amp.id}`, { name: 'Amp', dailyRate: 30, serialised: true, barcode: amp.barcode, unitCount: 5 });
+    await api('PUT', `/api/equipment/${amp.id}`, { name: 'Amp', dailyRate: 30, serialised: true, barcode: amp.barcode, unitCount: 2 }); // never removes
+    units = (await api('GET', `/api/equipment/${amp.id}`)).body.units;
+    expect(units).toHaveLength(5);
+    expect(units.every((u: { barcode: string | null }) => u.barcode)).toBe(true);
+  });
+
   it('enforces read-only role', async () => {
     const ro = (await api('POST', '/api/users', { name: 'RO', email: 'ro@example.com', password: 'longpassword1', role: 'READ_ONLY' })).body;
     const adminCookie = cookie;
