@@ -128,10 +128,38 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(webhookRoutes);
   await app.register(miscRoutes);
 
+  // Web app manifest (makes the app installable). Built per request so the installed app carries
+  // the business name and colour from Settings, not anything baked into the code.
+  app.get('/manifest.webmanifest', async (_req, reply) => {
+    const p = await prisma.businessProfile.findUnique({ where: { id: 1 }, select: { tradingName: true, legalName: true, primaryColour: true } });
+    const name = p?.tradingName || p?.legalName || 'HireStation';
+    reply.header('Content-Type', 'application/manifest+json').header('Cache-Control', 'no-cache');
+    return {
+      name, short_name: name.length > 12 ? name.split(/\s+/)[0].slice(0, 12) : name,
+      id: '/', start_url: '/', scope: '/', display: 'standalone', orientation: 'any',
+      background_color: '#ffffff', theme_color: p?.primaryColour || '#1e293b',
+      icons: [
+        { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+        { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+        { src: '/icons/maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+        { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      ],
+      shortcuts: [
+        { name: 'Bookings', url: '/bookings' },
+        { name: 'Calendar', url: '/calendar' },
+        { name: 'Equipment', url: '/equipment' },
+      ],
+    };
+  });
+
   // Serve the built frontend (single container deployment) with SPA fallback.
   const webDist = resolve(env.webDist || '../web/dist');
   if (existsSync(webDist)) {
-    await app.register(fastifyStatic, { root: webDist });
+    await app.register(fastifyStatic, {
+      root: webDist,
+      // The service worker and the page must be re-checked on every load so updates reach installed apps.
+      setHeaders: (res, file) => { if (/(sw\.js|index\.html)$/.test(file)) res.header('Cache-Control', 'no-cache'); },
+    });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) return reply.status(404).send({ error: 'Not found' });
       return reply.sendFile('index.html');

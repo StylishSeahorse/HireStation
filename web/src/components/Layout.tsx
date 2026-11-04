@@ -2,10 +2,11 @@ import { ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Bell, Box, CalendarDays, ClipboardList, FileSignature, LayoutDashboard, LogOut, Menu, Search, Settings, Users, UserCog, BarChart3, CalendarCheck } from 'lucide-react';
+import { Bell, Box, Download, Share, CalendarDays, ClipboardList, FileSignature, LayoutDashboard, LogOut, Menu, Search, Settings, Users, UserCog, BarChart3, CalendarCheck } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useMe, useSettings } from '@/lib/hooks';
 import { useFormat } from '@/lib/format';
+import { useInstall } from '@/lib/install';
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -52,6 +53,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-white px-4">
           <button className="lg:hidden" onClick={() => setOpen(true)} aria-label="Menu"><Menu /></button>
           <GlobalSearch />
+          <InstallButton />
           <Notifications />
         </header>
         <main className="mx-auto w-full max-w-7xl flex-1 p-4 sm:p-6">{children}</main>
@@ -114,6 +116,21 @@ function Notifications() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** "Install app" in the header, where the browser supports it (hidden once installed). */
+function InstallButton() {
+  const inst = useInstall();
+  const [help, setHelp] = useState(false);
+  if (inst.mode === 'prompt')
+    return <button onClick={inst.install} className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-50" title="Install as an app"><Download size={16} /><span className="hidden sm:inline">Install app</span></button>;
+  if (inst.mode !== 'ios') return null;
+  return (
+    <div className="relative shrink-0">
+      <button onClick={() => setHelp(!help)} className="inline-flex items-center gap-1 rounded-md border px-2 py-1.5 text-sm text-slate-600" title="Install as an app"><Download size={16} /><span className="hidden sm:inline">Install app</span></button>
+      {help && <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white p-3 text-sm shadow-lg">Tap <Share size={14} className="inline" /> <strong>Share</strong> in Safari, then <strong>Add to Home Screen</strong>.</div>}
     </div>
   );
 }

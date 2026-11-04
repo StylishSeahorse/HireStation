@@ -453,6 +453,23 @@ and tick **Overflow schedule** if the Docuseal template has the `equipment overf
   outstanding bonds. The dashboard shows the week ahead, overdue returns, unsigned contracts
   and outstanding invoices.
 
+## Install as an app (PWA)
+
+HireStation can be installed like a native app on phones, tablets and computers. It opens in its
+own window with its own home-screen icon, and the camera barcode scanner works inside it.
+
+- **Android / Chrome / Edge:** press **Install app** in the top bar (or use the browser menu → *Install app*).
+- **iPhone / iPad:** open it in **Safari**, tap **Share**, then **Add to Home Screen**.
+  The top bar shows these steps.
+- **Needs HTTPS.** Browsers only install apps (and allow the camera) from an `https://` address,
+  so use your public address (see *Option B*). Installing doesn't work from `http://<ip>:3000`.
+- **Name and colour:** the installed app takes its name and colour from *Settings*. The icon is a
+  neutral clipboard, because no brand assets ship with the code.
+- **Updates:** the app updates itself when you deploy a new version. Close and reopen it to pick
+  the update up.
+- **Offline:** without a connection the app still opens, but bookings, stock and prices always come
+  live from the server, so it needs the network to do anything. Nothing is stored on the device.
+
 ## Barcodes and scanning
 
 **Codes.** New equipment gets a barcode when it's created: `EQ00001`, `EQ00002`, …
