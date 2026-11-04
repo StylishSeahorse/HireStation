@@ -463,8 +463,8 @@ own window with its own home-screen icon, and the camera barcode scanner works i
   The top bar shows these steps.
 - **Needs HTTPS.** Browsers only install apps (and allow the camera) from an `https://` address,
   so use your public address (see *Option B*). Installing doesn't work from `http://<ip>:3000`.
-- **Name and colour:** the installed app takes its name and colour from *Settings*. The icon is a
-  neutral clipboard, because no brand assets ship with the code.
+- **Name and colour:** the installed app is called **Hire Manager** and takes its colour from
+  *Settings*. The icon is a neutral clipboard, because no brand assets ship with the code.
 - **Updates:** the app updates itself when you deploy a new version. Close and reopen it to pick
   the update up.
 - **Offline:** without a connection the app still opens, but bookings, stock and prices always come
